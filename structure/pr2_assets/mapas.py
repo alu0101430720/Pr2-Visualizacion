@@ -4,6 +4,7 @@ import pandas as pd
 from dagster import asset, Output, MetadataValue, OpExecutionContext
 from plotnine import ggplot, aes, geom_map, theme_void, labs, scale_fill_cmap, theme, element_text
 
+# Importaciones de configuración y utilidades del proyecto
 from config import REPO_DIR, DIR_GRAFICOS, GIT_BRANCH, repo_url
 from utils import commit_and_push
 from .git_ops import get_github_token
@@ -12,8 +13,8 @@ from .git_ops import get_github_token
 
 def _limpiar_nombre_municipio(texto) -> str:
     """
-    Normaliza nombres: 'Palmas de Gran Canaria, Las' -> 'Las Palmas De Gran Canaria'
-    y aplica Title Case para asegurar la coincidencia en el merge.
+    Normaliza nombres para asegurar la coincidencia en el merge:
+    'Palmas de Gran Canaria, Las' -> 'Las Palmas De Gran Canaria'.
     """
     if pd.isna(texto):
         return ""
@@ -22,7 +23,7 @@ def _limpiar_nombre_municipio(texto) -> str:
     if "," in texto:
         nombre, articulo = [p.strip() for p in texto.split(",", 1)]
         texto = f"{articulo} {nombre}"
-    # Normalizar a Title Case y quitar espacios extra
+    # Normalizar a Title Case para consistencia con el pipeline
     return texto.title().strip()
 
 # ── Assets ─────────────────────────────────────────────────────────────────────
@@ -30,68 +31,69 @@ def _limpiar_nombre_municipio(texto) -> str:
 @asset
 def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.DataFrame) -> Output:
     """
-    Genera un mapa de coropletas de la renta media por municipio cruzando
-    el TopoJSON del ISTAC con los datos del pipeline.
+    Genera un mapa de coropletas de la renta municipal para el año más reciente.
+    Sigue los principios de la gramática de gráficos y DataOps.
     """
-    # 1. Cargar el mapa (TopoJSON/GeoJSON)
-    ruta_geojson = os.path.join(REPO_DIR, "Municipios-2024.json")
+    # 1. Cargar la cartografía (TopoJSON/GeoJSON)
+    ruta_geojson = os.path.join(REPO_DIR, "Municipios-2024.json") 
     if not os.path.exists(ruta_geojson):
         raise FileNotFoundError(f"No se encuentra el archivo de mapa en: {ruta_geojson}")
     
-    context.log.info(f"Cargando cartografía desde: {ruta_geojson}")
+    context.log.info(f"Cargando municipios desde: {ruta_geojson}")
     gdf = gpd.read_file(ruta_geojson)
 
-    # 2. Limpiar nombres en el JSON (columna 'label')
-    # El archivo del ISTAC usa 'label' para el nombre del municipio
+    # 2. Limpieza de nombres en el mapa (columna 'label' identificada en el JSON)
     gdf['municipio_clean'] = gdf['label'].apply(_limpiar_nombre_municipio)
 
-    # 3. Preparar datos de renta
-    # Filtramos por una fuente específica (Sueldos y Salarios) para el mapa
+    # 3. Preparación de datos estadísticos
+    # Filtramos por el indicador de Sueldos y Salarios
     df_renta = integrar_renta_codislas[
         (integrar_renta_codislas["Fuente_Renta_Code"] == "SUELDOS_SALARIOS")
     ].copy()
     
-    # Aseguramos que los nombres en el DataFrame también estén limpios/normalizados
-    df_renta['Territorio_clean'] = df_renta['Territorio'].apply(_limpiar_nombre_municipio)
+    # SELECCIÓN TEMPORAL: Tomamos solo el año más reciente disponible 
+    ultimo_año = df_renta["Año"].max()
+    context.log.info(f"Filtrando datos para el año más reciente: {ultimo_año}")
+    df_actual = df_renta[df_renta["Año"] == ultimo_año].copy()
     
-    # Calculamos la media por municipio
-    df_mapa_data = df_renta.groupby("Territorio_clean")["Porcentaje"].mean().reset_index()
+    # Normalizamos los nombres en el DataFrame de rentas
+    df_actual['Territorio_clean'] = df_actual['Territorio'].apply(_limpiar_nombre_municipio)
 
-    # 4. Cruce (Merge)
+    # 4. Cruce de datos (Merge)
     gdf_final = gdf.merge(
-        df_mapa_data, 
+        df_actual, 
         left_on="municipio_clean", 
         right_on="Territorio_clean", 
         how="left"
     )
 
-    # Auditoría de cruce en logs
+    # Auditoría del cruce para el informe de calidad 
     n_total = len(gdf)
     n_con_datos = len(gdf_final.dropna(subset=['Porcentaje']))
-    context.log.info(f"Cruce completado: {n_con_datos} de {n_total} municipios vinculados.")
+    porcentaje_exito = round((n_con_datos / n_total) * 100, 2)
     
     if n_con_datos < n_total:
         faltantes = gdf_final[gdf_final['Porcentaje'].isna()]['municipio_clean'].tolist()
-        context.log.warning(f"Municipios sin datos vinculados: {faltantes}")
+        context.log.warning(f"Municipios sin datos vinculados ({n_total - n_con_datos}): {faltantes}")
 
-    # 5. Crear la visualización con plotnine
+    # 5. Visualización con Plotnine (Gramática de Gráficos) 
     mapa = (
         ggplot(gdf_final)
-        + geom_map(aes(fill="Porcentaje"))
+        + geom_map(aes(fill="Porcentaje")) # Mapeo de variable a estética fill 
         + scale_fill_cmap(cmap_name="viridis")
         + theme_void()
         + labs(
-            title="Distribución de Rentas por Municipio (Canarias)",
+            title=f"Distribución de Rentas por Municipio ({ultimo_año})",
             subtitle="Indicador: Sueldos y Salarios · Fuente: ISTAC",
-            fill="Media %"
+            fill="Renta (%)"
         )
         + theme(
-            plot_title=element_text(size=16, fontweight='bold'),
+            plot_title=element_text(size=14, fontweight='bold'),
             legend_position='right'
         )
     )
 
-    # 6. Guardar archivo
+    # 6. Guardar archivo y registrar metadatos para auditoría 
     os.makedirs(DIR_GRAFICOS, exist_ok=True)
     ruta_salida = os.path.join(DIR_GRAFICOS, "mapa_rentas_municipios.png")
     mapa.save(ruta_salida, width=12, height=8, dpi=150)
@@ -99,10 +101,10 @@ def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.
     return Output(
         value=ruta_salida,
         metadata={
-            "ruta_archivo": MetadataValue.path(ruta_salida),
-            "municipios_totales": MetadataValue.int(n_total),
-            "municipios_con_exito": MetadataValue.int(n_con_datos),
-            "porcentaje_cobertura": MetadataValue.float(round((n_con_datos/n_total)*100, 2))
+            "año_representado": MetadataValue.int(int(ultimo_año)),
+            "cobertura_municipios": MetadataValue.text(f"{n_con_datos} de {n_total}"),
+            "porcentaje_exito": MetadataValue.float(porcentaje_exito),
+            "ruta_png": MetadataValue.path(ruta_salida)
         }
     )
 
@@ -111,12 +113,14 @@ def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.
 #     context: OpExecutionContext,
 #     mapa_rentas_python: str,
 # ) -> None:
-#     """Sube el mapa generado al repositorio de GitHub."""
+#     """
+#     Automatiza el envío del mapa a GitHub para su visualización en GitHub Pages.
+#     """
 #     commit_and_push(
 #         repo_dir=REPO_DIR,
 #         remote_url=repo_url(get_github_token()),
 #         branch=GIT_BRANCH,
 #         files=[mapa_rentas_python],
-#         message="practica4: actualización de mapa de rentas municipal",
+#         message=f"practica4: actualización automática mapa de rentas ({mapa_rentas_python})", 
 #         ctx=context,
 #     )
