@@ -11,11 +11,11 @@ from dagster import (
     sensor,
 )
 
-from pr2_assets import git_ops, renta, codislas, nivelestudios, checks, ia_viz
+from pr2_assets import git_ops, renta, codislas, nivelestudios, checks, ia_viz, mapas
 
 # ── Assets y checks ────────────────────────────────────────────────────────────
 
-all_assets = load_assets_from_modules([git_ops, renta, codislas, nivelestudios, ia_viz])
+all_assets = load_assets_from_modules([git_ops, renta, codislas, nivelestudios, ia_viz, mapas])
 all_checks = load_asset_checks_from_modules([checks])
 
 
