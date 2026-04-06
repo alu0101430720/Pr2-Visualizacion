@@ -82,6 +82,79 @@ def commit_indicadores_istac(
     )
 
 @asset
+def mapa_paro_municipios(
+    context: OpExecutionContext, 
+    extraer_indicadores_istac: str # Dependencia: recibe la ruta del CSV generado
+) -> Output:
+    """
+    Genera el mapa de paro dependiendo de la extracción previa de indicadores.
+    """
+    # 1. Cargar la geometría del JSON
+    ruta_geojson = os.path.join(REPO_DIR, "Municipios-2024.json")
+    gdf = gpd.read_file(ruta_geojson)
+    
+    # Limpiamos nombres en el mapa para el cruce
+    gdf['municipio_clean'] = gdf['label'].apply(lambda x: str(x).title().strip())
+
+    # 2. Cargar los datos extraídos del CSV (la dependencia)
+    df_indicadores = pd.read_csv(extraer_indicadores_istac)
+    # Aseguramos limpieza en los nombres del CSV para el merge
+    df_indicadores['Territorio_clean'] = df_indicadores['Territorio'].apply(lambda x: str(x).title().strip())
+
+    # 3. Cruce de datos (Merge)
+    gdf_final = gdf.merge(
+        df_indicadores, 
+        left_on="municipio_clean", 
+        right_on="Territorio_clean", 
+        how="left"
+    )
+
+    # 4. Crear la visualización
+    mapa = (
+        ggplot(gdf_final)
+        + geom_map(aes(fill="tpar_t")) # Usamos la variable de la extracción
+        + scale_fill_cmap(cmap_name="YlOrRd") 
+        + theme_void()
+        + labs(
+            title="Tasa de paro total en Canarias por municipio en 2024",
+            subtitle="Fuente: Datos extraídos del ISTAC (EPA-Reg)",
+            fill="Paro (%)"
+        )
+        + theme(plot_title=element_text(size=14, fontweight='bold'))
+    )
+
+    # 5. Guardar en la carpeta de gráficos
+    os.makedirs(DIR_GRAFICOS, exist_ok=True)
+    ruta_salida = os.path.join(DIR_GRAFICOS, "mapa_tasa_paro_2024.png")
+    mapa.save(ruta_salida, width=12, height=8, dpi=150)
+
+    return Output(
+        value=ruta_salida,
+        metadata={
+            "ruta": MetadataValue.path(ruta_salida),
+            "dependencia": MetadataValue.text("extraer_indicadores_istac"),
+            "cobertura": MetadataValue.float(len(gdf_final.dropna(subset=['tpar_t'])) / len(gdf) * 100)
+        }
+    )
+
+@asset
+def commit_mapa_paro(
+    context: OpExecutionContext,
+    mapa_paro_municipios: str, # Dependencia del PNG generado
+) -> None:
+    """
+    Comitea el mapa de paro en la carpeta de gráficos del repositorio.
+    """
+    commit_and_push(
+        repo_dir=REPO_DIR,
+        remote_url=repo_url(get_github_token()),
+        branch=GIT_BRANCH,
+        files=[mapa_paro_municipios], # Sube el archivo de la carpeta gráficos
+        message="practica4: commit del mapa de paro municipal (generado vía indicadores)",
+        ctx=context,
+    )
+
+@asset
 def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.DataFrame) -> Output:
     """
     Genera un mapa de coropletas de la renta municipal para el año más reciente.
