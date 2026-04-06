@@ -122,6 +122,10 @@ def mapa_paro_municipios(
             subtitle="Fuente: Datos extraídos del ISTAC (EPA-Reg)",
             fill="Paro (%)"
         )
+        + theme(
+            plot_title=element_text(size=14, fontweight='bold'),
+            legend_position='right'
+        )
     )
 
     # 5. Guardar en la carpeta de gráficos

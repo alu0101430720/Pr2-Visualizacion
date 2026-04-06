@@ -48,8 +48,12 @@ job_ia = define_asset_job(
 
 # Job para el mapa municipal de rentas (incluye generación y subida a GitHub)
 job_mapa = define_asset_job(
-    name="pipeline_mapa",
-    selection=AssetSelection.keys(AssetKey("commit_mapa_python")).upstream(),
+    name="pipeline_mapas_completo",
+    selection=(
+        # Seleccionamos los dos puntos finales de los mapas
+        AssetSelection.keys("commit_mapa_python") | 
+        AssetSelection.keys("commit_mapa_paro")
+    ).upstream(), # .upstream() arrastra automáticamente la extracción y los PNGs
 )
 
 
