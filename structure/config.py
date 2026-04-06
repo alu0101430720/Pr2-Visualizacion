@@ -10,7 +10,7 @@ por lo que el check siempre validará el gráfico que se está generando en ese 
 REPO_DIR   = "C:/Users/carlo/OneDrive/Escritorio/Pr4-Visualizacion/Pr2-Visualizacion"
 REPO_OWNER = "alu0101430720"
 REPO_NAME  = "Pr2-Visualizacion"
-GIT_BRANCH = "practica3_refactorizado"
+GIT_BRANCH = "practica4_sensores"
 GIT_EMAIL  = "alu0101430720@ull.edu.es"
 GIT_NAME   = "Carlos Yanes"
 
