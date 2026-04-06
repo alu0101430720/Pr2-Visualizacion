@@ -28,7 +28,7 @@ def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.
     # Usamos 'NAME' del GeoJSON y 'Territorio' de tu DataFrame limpio
     gdf_final = gdf.merge(
         df_mapa_data, 
-        left_on="NAME", 
+        left_on="label", 
         right_on="Territorio", 
         how="left"
     )
