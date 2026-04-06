@@ -84,24 +84,26 @@ def commit_indicadores_istac(
 @asset
 def mapa_paro_municipios(
     context: OpExecutionContext, 
-    extraer_indicadores_istac: str # Dependencia: recibe la ruta del CSV generado
+    extraer_indicadores_istac: str 
 ) -> Output:
-    """
-    Genera el mapa de paro dependiendo de la extracción previa de indicadores.
-    """
-    # 1. Cargar la geometría del JSON
+    # 1. Cargar la geometría
     ruta_geojson = os.path.join(REPO_DIR, "Municipios-2024.json")
     gdf = gpd.read_file(ruta_geojson)
     
-    # Limpiamos nombres en el mapa para el cruce
+    # SOLUCIÓN: Eliminamos las columnas estadísticas del GeoJSON original 
+    # para evitar duplicados (_x, _y) durante el merge
+    columnas_a_quitar = ['tpar_t', 'psal_t', 'ppar_t', 'tsal_t']
+    gdf = gdf.drop(columns=[c for c in columnas_a_quitar if c in gdf.columns])
+    
+    # Limpiamos nombres para el cruce
     gdf['municipio_clean'] = gdf['label'].apply(lambda x: str(x).title().strip())
 
-    # 2. Cargar los datos extraídos del CSV (la dependencia)
+    # 2. Cargar los datos extraídos (la dependencia)
     df_indicadores = pd.read_csv(extraer_indicadores_istac)
-    # Aseguramos limpieza en los nombres del CSV para el merge
     df_indicadores['Territorio_clean'] = df_indicadores['Territorio'].apply(lambda x: str(x).title().strip())
 
-    # 3. Cruce de datos (Merge)
+    # 3. Cruce de datos
+    # Ahora 'tpar_t' solo vendrá de df_indicadores, sin sufijos _x o _y
     gdf_final = gdf.merge(
         df_indicadores, 
         left_on="municipio_clean", 
@@ -109,10 +111,10 @@ def mapa_paro_municipios(
         how="left"
     )
 
-    # 4. Crear la visualización
+    # 4. Crear la visualización (Ahora sí encontrará 'tpar_t')
     mapa = (
         ggplot(gdf_final)
-        + geom_map(aes(fill="tpar_t")) # Usamos la variable de la extracción
+        + geom_map(aes(fill="tpar_t")) 
         + scale_fill_cmap(cmap_name="YlOrRd") 
         + theme_void()
         + labs(
@@ -120,7 +122,6 @@ def mapa_paro_municipios(
             subtitle="Fuente: Datos extraídos del ISTAC (EPA-Reg)",
             fill="Paro (%)"
         )
-        + theme(plot_title=element_text(size=14, fontweight='bold'))
     )
 
     # 5. Guardar en la carpeta de gráficos
