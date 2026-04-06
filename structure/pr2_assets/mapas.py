@@ -30,7 +30,7 @@ def _limpiar_nombre_municipio(texto) -> str:
 # ── Assets ─────────────────────────────────────────────────────────────────────
 
 @asset
-def extraer_indicadores_istac(context: OpExecutionContext) -> Output:
+def extraer_indicadores_istac(context: OpExecutionContext, pull_repository: str) -> Output:
     """
     Extrae los indicadores laborales (psal_t, ppar_t, tsal_t) del JSON 
     y los exporta a un CSV para Power BI.
