@@ -3,9 +3,10 @@ import geopandas as gpd
 import pandas as pd
 from dagster import asset, Output, MetadataValue, OpExecutionContext
 from plotnine import ggplot, aes, geom_map, theme_void, labs, scale_fill_cmap, theme, element_text
+import json 
 
 # Importaciones de configuración y utilidades del proyecto
-from config import REPO_DIR, DIR_GRAFICOS, GIT_BRANCH, repo_url
+from config import REPO_DIR, DIR_GRAFICOS, DIR_CLEAN, GIT_BRANCH, repo_url
 from utils import commit_and_push
 from .git_ops import get_github_token
 
@@ -27,6 +28,43 @@ def _limpiar_nombre_municipio(texto) -> str:
     return texto.title().strip()
 
 # ── Assets ─────────────────────────────────────────────────────────────────────
+
+@asset
+def extraer_indicadores_istac(context: OpExecutionContext) -> Output:
+    """
+    Extrae los indicadores laborales (psal_t, ppar_t, tsal_t) del JSON 
+    y los exporta a un CSV para Power BI.
+    """
+    ruta_json = os.path.join(REPO_DIR, "Municipios-2024.json")
+    
+    with open(ruta_json, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    
+    # Navegamos por la estructura específica del TopoJSON del ISTAC
+    geometrias = data['objects']['Municipios-2024']['geometries']
+    
+    # Extraemos las propiedades de cada municipio
+    datos_municipios = [g['properties'] for g in geometrias]
+    df_indicadores = pd.DataFrame(datos_municipios)
+    
+    # Limpieza: Renombramos 'label' a 'Territorio' para facilitar el cruce en Power BI
+    df_indicadores = df_indicadores.rename(columns={'label': 'Territorio'})
+    
+    # Guardar en la carpeta de datasets limpios
+    os.makedirs(DIR_CLEAN, exist_ok=True)
+    ruta_csv = os.path.join(DIR_CLEAN, "indicadores_istac_2024.csv")
+    df_indicadores.to_csv(ruta_csv, index=False)
+    
+    context.log.info(f"Fichero de indicadores generado en: {ruta_csv}")
+    
+    return Output(
+        value=ruta_csv,
+        metadata={
+            "filas": MetadataValue.int(len(df_indicadores)),
+            "columnas": MetadataValue.text(str(list(df_indicadores.columns))),
+            "indicadores_clave": MetadataValue.text("psal_t, ppar_t, tsal_t")
+        }
+    )
 
 @asset
 def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.DataFrame) -> Output:
