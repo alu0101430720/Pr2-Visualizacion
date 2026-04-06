@@ -339,6 +339,7 @@ def template_ia_social(
 
     mapa_categorias = {k: v for k, v in MAPA_EDUCACION.items() if isinstance(k, str)}
 
+    # Template con el cascarón de la función completa
     template_con_datos = f"""def generar_plot_social(df):
     import pandas as pd
     if 'Sexo' in df.columns:
@@ -356,41 +357,47 @@ def template_ia_social(
     df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()
     df = df.rename(columns={{'Total': 'n'}})
     
-    # escribe aqui el bloque ggplot (reemplaza la linea siguiente)
+    # INSERTA AQUI EL BLOQUE GGPLOT (ASIGNALO A LA VARIABLE 'plot')
     plot = None
+    
     return plot
 """
 
+    # Hacemos especial énfasis en devolver la función COMPLETA
     system = (
         "Eres un experto en Plotnine. "
-        "El template ya tiene la preparación de datos. Tu ÚNICA tarea es reemplazar 'plot = None' con el bloque ggplot. "
-        "Devuelve EXCLUSIVAMENTE el código Python.\n"
-        f"Template:\n{template_con_datos}"
+        "Tu tarea es tomar el template de código proporcionado y completarlo. "
+        "IMPORTANTE: Debes devolver la función COMPLETA. Empieza con `def generar_plot_social(df):`, "
+        "copia toda la lógica de preparación de datos intacta y sustituye 'plot = None' por el bloque de código ggplot. "
+        "Devuelve EXCLUSIVAMENTE código Python válido, sin markdown ni texto extra."
     )
     
-    descripcion = f"""Reemplaza 'plot = None' con:
+    descripcion = f"""Template base:
+{template_con_datos}
 
-plot = (
-    ggplot(df, aes(x='Periodo', y='n', fill='Categoria'))
-    + geom_area(position='fill', alpha=0.85, color='white')
-    + scale_fill_brewer(type='qual', palette='Set2')
-    + scale_x_continuous(breaks=list(range(2019, 2026, 2)))
-    + labs(title='Distribución del Nivel de Estudios — {territorio}',
-           subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',
-           x='Año', y='Proporción', fill='Nivel educativo')
-    + theme_minimal()
-    + theme(figure_size=(12, 5), legend_position='right')
-)
+Instrucción:
+Reemplaza la línea 'plot = None' con el siguiente bloque exacto de ggplot, manteniendo el resto de la función intacta:
+
+    plot = (
+        ggplot(df, aes(x='Periodo', y='n', fill='Categoria'))
+        + geom_area(position='fill', alpha=0.85, color='white')
+        + scale_fill_brewer(type='qual', palette='Set2')
+        + scale_x_continuous(breaks=list(range(2019, 2026, 2)))
+        + labs(title='Distribución del Nivel de Estudios — {territorio}',
+               subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',
+               x='Año', y='Proporción', fill='Nivel educativo')
+        + theme_minimal()
+        + theme(figure_size=(12, 5), legend_position='right')
+    )
 """
     context.log.info(f"Template social · territorio='{territorio}'")
     return {
         "model": IA_MODEL, "temperature": 0.1, "stream": False,
         "messages": [
             {"role": "system", "content": system},
-            {"role": "user",   "content": "Completa el template:\n" + descripcion},
+            {"role": "user",   "content": descripcion},
         ],
     }
-
 @asset
 def codigo_generado_ia_renta(
     context: OpExecutionContext,
