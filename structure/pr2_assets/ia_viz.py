@@ -137,11 +137,45 @@ def _corregir_codigo(codigo: str, context: OpExecutionContext = None) -> str:
         return f"{func}(values={{{pairs}}})"
     codigo = re.sub(r"(scale_\w+_manual)\(values=\{([^}:]+)\}\)", _fix_set, codigo)
 
+    # 7. Lambda anidado con parentesis sin cerrar.
+    # El LLM genera .apply(lambda x: 'A' if ... else('B' if ...))
+    # en varias lineas olvidando cerrar el parentesis de .apply().
+    # compile() lo detecta y se reemplaza toda la asignacion de 'Categoria'
+    # por _categorizar(), funcion auxiliar inyectada al inicio de la funcion.
+    try:
+        compile(codigo, '<check>', 'exec')
+    except SyntaxError as e:
+        if 'never closed' in str(e.msg) or 'was not closed' in str(e.msg):
+            pat = r"\.apply\(lambda[^)]*\n(?:[ \t]+[^\n]*\n)*?(?=\s*\n\s*df\[)"
+            codigo = re.sub(
+                pat,
+                ".apply(_categorizar)",
+                codigo,
+                flags=re.DOTALL,
+            )
+            if '_categorizar' in codigo and 'def _categorizar' not in codigo:
+                fn_lines = [
+                    '    def _categorizar(x):',
+                    "        x = str(x).lower()",
+                    "        if 'primaria' in x or 'primera etapa' in x:",
+                    "            return 'Basicos'",
+                    "        elif 'segunda etapa' in x:",
+                    "            return 'Medios'",
+                    "        elif 'superior' in x:",
+                    "            return 'Superiores'",
+                    "        else:",
+                    "            return 'Sin Estudios/Otros'",
+                ]
+                fn_str = '\n'.join(fn_lines) + '\n'
+                codigo = re.sub(
+                    r'(def generar_plot_social\(df\):[ \t]*\n)',
+                    lambda m: m.group(0) + fn_str,
+                    codigo,
+                )
     if context and codigo != original:
         context.log.info("_corregir_codigo aplicó correcciones al código del LLM.")
 
     return codigo
-
 
 def _validar_codigo(codigo: str, nombre_funcion: str) -> None:
     """Lanza ValueError si el código no contiene la función esperada o ggplot."""
@@ -326,45 +360,51 @@ def template_ia_social(
         "Nivel de estudios en curso",
     )
 
-    template = (
+    # Precalcular el mapa de categorías en Python y embeber el código
+    # de preparación en el propio template. El LLM SOLO escribe el ggplot.
+    mapa_categorias = {k: v for k, v in MAPA_EDUCACION.items() if isinstance(k, str)}
+
+    template_con_datos = (
         "def generar_plot_social(df):\n"
-        "    # plot = (ggplot(df, aes(...)) + geom_... + ...)\n"
-        "    # return plot\n"
-    )
-    system = (
-        "Eres un experto en la gramática de gráficos y Plotnine. "
-        "Traduce la descripción a código Python ejecutable siguiendo el template. "
-        "Devuelve EXCLUSIVAMENTE el código Python, sin markdown ni explicaciones. "
-        "La función debe llamarse exactamente 'generar_plot_social' y recibir 'df'."
-        f"\nTemplate:\n{template}"
-    )
-    descripcion = (
-        "Dataset: df con columnas [" + columnas + "].\n"
-        "Columna de nivel de estudios: '" + col_estudios + "'\n\n"
-        "Pasos dentro de la función:\n"
-        "  1. Si existe 'Sexo', filtrar df = df[df['Sexo'] == 'Total']\n"
-        "  2. Si existe 'ISLA_clean', filtrar df = df[df['ISLA_clean'] == '" + territorio + "']\n"
-        "  3. Crear columna 'Categoria' mapeando '" + col_estudios + "' con str.contains:\n"
-        "       contiene 'primaria' o 'Primera etapa' -> 'Basicos'\n"
-        "       contiene 'Segunda etapa'              -> 'Medios'\n"
-        "       contiene 'superior' (ignorar mayusc.) -> 'Superiores'\n"
-        "       cualquier otro                        -> 'Sin Estudios/Otros'\n"
-        "  4. df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)\n"
-        "  5. df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()\n"
-        "  6. Renombrar 'Total' a 'n': df = df.rename(columns={'Total': 'n'})\n\n"
-        "Estéticas (aes): x='Periodo', y='n', fill='Categoria'\n\n"
-        "Geometría: geom_area(position='fill')\n\n"
-        "Escalas:\n"
-        "  scale_fill_brewer(type='qual', palette='Set2')\n"
-        "  scale_x_continuous(breaks=list(range(2019, 2026, 2)))\n\n"
-        "labs(title='Distribución del Nivel de Estudios — " + territorio + "',\n"
-        "     subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',\n"
-        "     x='Año', y='Proporción', fill='Nivel educativo')\n\n"
-        "theme_minimal() con el título en negrita tamaño 13.\n\n"
-        "Gestalt Similitud: scale_fill_brewer(Set2) asigna colores cualitativos de ColorBrewer\n"
-        "de forma consistente — cada nivel educativo siempre tiene el mismo color."
+        "    import pandas as pd\n"
+        "    # preparacion de datos (NO modificar este bloque)\n"
+        "    if 'Sexo' in df.columns:\n"
+        "        df = df[df['Sexo'] == 'Total'].copy()\n"
+        "    if 'ISLA_clean' in df.columns:\n"
+        "        df = df[df['ISLA_clean'] == '" + territorio + "'].copy()\n"
+        "    _mapa = " + str(mapa_categorias) + "\n"
+        "    df['Categoria'] = df['" + col_estudios + "'].map(_mapa).fillna('Sin Estudios/Otros')\n"
+        "    df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)\n"
+        "    df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()\n"
+        "    df = df.rename(columns={'Total': 'n'})\n"
+        "    # escribe aqui el bloque ggplot (reemplaza la linea siguiente)\n"
+        "    plot = None\n"
+        "    return plot\n"
     )
 
+    system = (
+        "Eres un experto en Plotnine. "
+        "El template ya tiene el codigo de preparacion de datos. "
+        "Tu UNICA tarea: reemplazar 'plot = None' con el bloque ggplot. "
+        "Copia el template completo y sustituye solo esa linea. "
+        "Devuelve EXCLUSIVAMENTE el codigo Python, sin markdown ni explicaciones. "
+        "La funcion debe llamarse exactamente 'generar_plot_social'.\n"
+        "Template:\n" + template_con_datos
+    )
+    descripcion = (
+        "Reemplaza 'plot = None' con:\n\n"
+        "plot = (\n"
+        "    ggplot(df, aes(x='Periodo', y='n', fill='Categoria'))\n"
+        "    + geom_area(position='fill')\n"
+        "    + scale_fill_brewer(type='qual', palette='Set2')\n"
+        "    + scale_x_continuous(breaks=list(range(2019, 2026, 2)))\n"
+        "    + labs(title='Distribución del Nivel de Estudios — " + territorio + "',\n"
+        "           subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',\n"
+        "           x='Año', y='Proporción', fill='Nivel educativo')\n"
+        "    + theme_minimal()\n"
+        ")\n\n"
+        "Gestalt Similitud: scale_fill_brewer(Set2) — ColorBrewer cualitativo."
+    )
     context.log.info(
         f"Template social · territorio='{territorio}' · col='{col_estudios}'"
     )
