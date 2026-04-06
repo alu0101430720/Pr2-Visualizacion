@@ -108,19 +108,19 @@ def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.
         }
     )
 
-# @asset
-# def commit_mapa_python(
-#     context: OpExecutionContext,
-#     mapa_rentas_python: str,
-# ) -> None:
-#     """
-#     Automatiza el envío del mapa a GitHub para su visualización en GitHub Pages.
-#     """
-#     commit_and_push(
-#         repo_dir=REPO_DIR,
-#         remote_url=repo_url(get_github_token()),
-#         branch=GIT_BRANCH,
-#         files=[mapa_rentas_python],
-#         message=f"practica4: actualización automática mapa de rentas ({mapa_rentas_python})", 
-#         ctx=context,
-#     )
+@asset
+def commit_mapa_python(
+    context: OpExecutionContext,
+    mapa_rentas_python: str,
+) -> None:
+    """
+    Automatiza el envío del mapa a GitHub para su visualización en GitHub Pages.
+    """
+    commit_and_push(
+        repo_dir=REPO_DIR,
+        remote_url=repo_url(get_github_token()),
+        branch=GIT_BRANCH,
+        files=[mapa_rentas_python],
+        message=f"practica4: actualización automática mapa de rentas ({mapa_rentas_python})", 
+        ctx=context,
+    )

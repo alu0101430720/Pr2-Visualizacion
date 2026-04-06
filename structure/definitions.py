@@ -53,6 +53,7 @@ _FICHEROS_VIGILADOS = [
     "distribucion-renta-canarias.csv",
     "codislas.csv",
     "nivelestudios.xlsx",
+    "Municipios-2024.json",
 ]
 
 @sensor(job=job_completo, minimum_interval_seconds=30)
