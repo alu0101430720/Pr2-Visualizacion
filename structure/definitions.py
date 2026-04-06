@@ -35,7 +35,8 @@ job_limpieza = define_asset_job(
     name="solo_limpieza",
     selection=(
         AssetSelection.keys(AssetKey("guardar_nivelestudios_limpio")) | 
-        AssetSelection.keys(AssetKey("mapa_rentas_python"))
+        AssetSelection.keys(AssetKey("mapa_rentas_python")) |
+        AssetSelection.keys(AssetKey("extraer_indicadores_istac"))
     ).upstream(),
 )
 
