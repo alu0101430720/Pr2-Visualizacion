@@ -7,7 +7,7 @@ por lo que el check siempre validará el gráfico que se está generando en ese 
 """
 
 # ── Repositorio Git ────────────────────────────────────────────────────────────
-REPO_DIR   = "/content/Pr2-Visualizacion"
+REPO_DIR   = "C:/Users/carlo/OneDrive/Escritorio/Pr4-Visualizacion/Pr2-Visualizacion"
 REPO_OWNER = "alu0101430720"
 REPO_NAME  = "Pr2-Visualizacion"
 GIT_BRANCH = "practica3_refactorizado"
@@ -17,14 +17,13 @@ GIT_NAME   = "Carlos Yanes"
 def repo_url(token: str) -> str:
     return f"https://{token}@github.com/{REPO_OWNER}/{REPO_NAME}.git"
 
-
 # ── Rutas de datasets ──────────────────────────────────────────────────────────
-# RAW_RENTA         = f"{REPO_DIR}/distribucion-renta-canarias.csv"
-# RAW_CODISLAS      = f"{REPO_DIR}/codislas.csv"
-# RAW_NIVELESTUDIOS = f"{REPO_DIR}/nivelestudios.xlsx"
-RAW_RENTA         = f"{REPO_DIR}/datasets-check/distribucion-renta-canarias-checks.csv"
-RAW_CODISLAS      = f"{REPO_DIR}/datasets-check/codislas-checks.csv"
-RAW_NIVELESTUDIOS = f"{REPO_DIR}/datasets-check/nivelestudios-checks.xlsx"
+RAW_RENTA         = f"{REPO_DIR}/distribucion-renta-canarias.csv"
+RAW_CODISLAS      = f"{REPO_DIR}/codislas.csv"
+RAW_NIVELESTUDIOS = f"{REPO_DIR}/nivelestudios.xlsx"
+# RAW_RENTA         = f"{REPO_DIR}/datasets-check/distribucion-renta-canarias-checks.csv"
+# RAW_CODISLAS      = f"{REPO_DIR}/datasets-check/codislas-checks.csv"
+# RAW_NIVELESTUDIOS = f"{REPO_DIR}/datasets-check/nivelestudios-checks.xlsx"
 
 DIR_CLEAN   = f"{REPO_DIR}/datasets-clean"
 DIR_GRAFICOS = f"{REPO_DIR}/graficos"

@@ -36,41 +36,39 @@ job_limpieza = define_asset_job(
     selection=AssetSelection.keys(AssetKey("guardar_nivelestudios_limpio")).upstream(),
 )
 
-# Job exclusivo para el pipeline IA — útil para lanzarlo de forma aislada
-# sin necesidad de re-ejecutar la limpieza y transformación de datos.
+# Job exclusivo para el pipeline IA (lanzarlo sin re-ejecutar limpieza)
 job_ia = define_asset_job(
     name="pipeline_ia",
     selection=AssetSelection.keys(AssetKey("commit_visualizacion_ia")).upstream(),
 )
 
 
-# ── Sensor: dispara pipeline_completo cuando cambia algún fichero de datos ─────
+# ── Sensor: dispara pipeline_completo cuando cambian los ficheros de datos ─────
 #
-# Vigila los tres ficheros de datos crudos del proyecto. Si cualquiera de ellos
-# cambia (mtime), lanza job_completo automáticamente.
-#
-# Para activarlo: en la UI de Dagster → Sensors → sensor_cambio_datos → ON.
+# Vigila los tres ficheros de datos crudos en la RAÍZ del repo clonado.
+# Si cualquiera cambia (mtime), lanza job_completo automáticamente.
+# Para activarlo: Dagster UI → Sensors → sensor_cambio_datos → ON.
 
 _FICHEROS_VIGILADOS = [
-    "distribucion-renta-canarias-checks.csv",
-    "codislas-checks.csv",
-    "nivelestudios-checks.xlsx",
+    "distribucion-renta-canarias.csv",
+    "codislas.csv",
+    "nivelestudios.xlsx",
 ]
 
 @sensor(job=job_completo, minimum_interval_seconds=30)
 def sensor_cambio_datos(context):
     """
-    Vigila los ficheros de datos crudos en datasets-check/.
-    Si detecta un cambio en el mtime de cualquiera de ellos lanza job_completo.
+    Vigila los ficheros de datos crudos en la raíz de Pr2-Visualizacion/.
+    Si detecta un cambio en el mtime de cualquiera, lanza job_completo.
 
-    El cursor almacena los últimos mtimes conocidos como cadena separada por '|'
+    El cursor almacena los mtimes como cadena separada por '|'
     en el mismo orden que _FICHEROS_VIGILADOS.
     """
     from config import REPO_DIR
 
     mtimes_actuales = []
     for nombre in _FICHEROS_VIGILADOS:
-        ruta = os.path.join(REPO_DIR, "datasets-check", nombre)
+        ruta = os.path.join(REPO_DIR, nombre)
         mtimes_actuales.append(
             str(os.path.getmtime(ruta)) if os.path.exists(ruta) else "0"
         )
