@@ -33,13 +33,22 @@ job_graficos_y_commit = define_asset_job(
 
 job_limpieza = define_asset_job(
     name="solo_limpieza",
-    selection=AssetSelection.keys(AssetKey("guardar_nivelestudios_limpio")).upstream(),
+    selection=(
+        AssetSelection.keys(AssetKey("guardar_nivelestudios_limpio")) | 
+        AssetSelection.keys(AssetKey("mapa_rentas_python"))
+    ).upstream(),
 )
 
 # Job exclusivo para el pipeline IA (lanzarlo sin re-ejecutar limpieza)
 job_ia = define_asset_job(
     name="pipeline_ia",
     selection=AssetSelection.keys(AssetKey("commit_visualizacion_ia")).upstream(),
+)
+
+# Job para el mapa municipal de rentas (incluye generación y subida a GitHub)
+job_mapa = define_asset_job(
+    name="pipeline_mapa",
+    selection=AssetSelection.keys(AssetKey("commit_mapa_python")).upstream(),
 )
 
 
@@ -94,6 +103,6 @@ def sensor_cambio_datos(context):
 defs = Definitions(
     assets=all_assets,
     asset_checks=all_checks,
-    jobs=[job_completo, job_graficos_y_commit, job_limpieza, job_ia],
+    jobs=[job_completo, job_graficos_y_commit, job_limpieza, job_ia, job_mapa],
     sensors=[sensor_cambio_datos],
 )
