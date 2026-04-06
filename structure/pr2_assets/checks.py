@@ -12,6 +12,8 @@ import os
 import re
 
 import pandas as pd
+import geopandas as gpd
+from config import REPO_DIR
 from dagster import (
     AssetCheckResult,
     AssetCheckSeverity,
@@ -524,36 +526,135 @@ def check_png_ia_generado(visualizacion_ia_png: list) -> AssetCheckResult:
                 "no devolvió el objeto ggplot. Directorio esperado: " + DIR_GRAFICOS),
         })
 
-@asset_check(asset="mapa_rentas_python", name="check_cobertura_municipios_mapa",
-    description="Verifica que al menos el 95% de los municipios tengan datos tras el merge. Gestalt — Figura y Fondo.")
-def check_cobertura_municipios_mapa(context, mapa_rentas_python: str) -> AssetCheckResult:
-    # Nota: Para este check lo ideal es que el asset devuelva un objeto con metadatos 
-    # o acceder a los metadatos de la última materialización.
-    # Si el asset devuelve la ruta, podemos leer los metadatos desde el context.
+# Mapas --------------
+
+@asset_check(asset="mapa_rentas_python", name="check_cobertura_municipios_mapa")
+def check_cobertura_municipios_mapa(
+    context, 
+    mapa_rentas_python: str, # Recibe la ruta (salida del asset)
+    integrar_renta_codislas: pd.DataFrame # Recibe los datos originales para validar el cruce
+) -> AssetCheckResult:
+    """
+    Calcula el porcentaje real de municipios que tienen datos tras el merge.
+    """
+    # 1. Cargar la cartografía
+    ruta_geojson = os.path.join(REPO_DIR, "Municipios-2024.json")
+    gdf = gpd.read_file(ruta_geojson)
     
-    # Supongamos que recuperamos el valor de cobertura enviado en los metadatos del asset
-    # En Dagster es común usar la salida del asset para validaciones adicionales
+    # 2. Replicar la limpieza mínima para el cruce
+    gdf['municipio_clean'] = gdf['label'].apply(lambda x: str(x).title().strip())
+    df_data = integrar_renta_codislas.copy()
+    df_data['Territorio_clean'] = df_data['Territorio'].apply(lambda x: str(x).title().strip())
+    
+    # 3. Calcular cobertura
+    municipios_con_datos = gdf['municipio_clean'].isin(df_data['Territorio_clean']).sum()
+    total_municipios = len(gdf)
+    porcentaje = (municipios_con_datos / total_municipios) * 100
+    
+    passed = porcentaje >= 95.0
+    
     return AssetCheckResult(
-        passed=True, # Lógica basada en metadatos de cobertura
+        passed=passed,
         severity=AssetCheckSeverity.WARN,
         metadata={
-            "principio_gestalt": MetadataValue.text("Figura y Fondo — Demasiados municipios vacíos rompen la forma del archipiélago."),
-            "mensaje": MetadataValue.text("Si la cobertura es baja, revisa la limpieza de nombres en mapas.py.")
+            "porcentaje_cobertura": MetadataValue.float(porcentaje),
+            "municipios_faltantes": MetadataValue.int(total_municipios - municipios_con_datos),
+            "principio_gestalt": MetadataValue.text("Figura y Fondo — Si falta >5%, la silueta de Canarias se desdibuja."),
         }
     )
 
-@asset_check(asset="mapa_rentas_python", name="check_mapa_png_valido",
-    description="Verifica que el PNG del mapa existe y tiene contenido. Gestalt — Veracidad Visual.")
+@asset_check(asset="mapa_rentas_python", name="check_mapa_png_valido")
 def check_mapa_png_valido(mapa_rentas_python: str) -> AssetCheckResult:
-    existe = os.path.exists(mapa_rentas_python)
-    size_kb = round(os.path.getsize(mapa_rentas_python) / 1024, 1) if existe else 0.0
-    passed = existe and size_kb > 15.0 # Los mapas suelen pesar más que los gráficos simples
+    """
+    Verifica que el archivo físico existe y tiene un tamaño coherente.
+    """
+    if not os.path.exists(mapa_rentas_python):
+        return AssetCheckResult(passed=False, metadata={"error": MetadataValue.text("Archivo no encontrado")})
+    
+    size_kb = os.path.getsize(mapa_rentas_python) / 1024
+    # Subimos el umbral: un mapa real de plotnine suele rondar los 100-200 KB
+    passed = size_kb > 30.0 
     
     return AssetCheckResult(
         passed=passed,
         severity=AssetCheckSeverity.ERROR,
         metadata={
-            "size_kb": MetadataValue.float(size_kb),
-            "principio_gestalt": MetadataValue.text("Veracidad Visual — Un mapa de 0KB es una representación falsa."),
+            "size_kb": MetadataValue.float(round(size_kb, 2)),
+            "principio_gestalt": MetadataValue.text("Veracidad Visual — Un archivo pequeño indica un mapa vacío o sin polígonos coloreados."),
+        }
+    )
+
+import os
+import pandas as pd
+from dagster import asset_check, AssetCheckResult, AssetCheckSeverity, MetadataValue
+
+# ── Checks para el CSV de Indicadores ──────────────────────────────────────────
+
+@asset_check(asset="extraer_indicadores_istac", name="check_integridad_istac")
+def check_integridad_istac(extraer_indicadores_istac: str) -> AssetCheckResult:
+    """
+    Verifica que el CSV extraído del JSON sea coherente:
+    1. Que tenga los 88 municipios.
+    2. Que la suma de hombres y mujeres coincida con el total.
+    """
+    df = pd.read_csv(extraer_indicadores_istac)
+    
+    # 1. Validación de cantidad (88 municipios en Canarias)
+    n_municipios = len(df)
+    count_ok = n_municipios == 88
+    
+    # 2. Validación de suma (Absolutos: Total = M + F)
+    # Calculamos la diferencia absoluta total en la población parada
+    diff_paro = (df['ppar_t'] - (df['ppar_m'] + df['ppar_f'])).abs().sum()
+    suma_ok = diff_paro < 1.0 # Tolerancia por posibles redondeos en la fuente
+    
+    return AssetCheckResult(
+        passed=count_ok and suma_ok,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={
+            "municipios_detectados": MetadataValue.int(n_municipios),
+            "desviacion_suma_paro": MetadataValue.float(float(diff_paro)),
+            "nota": MetadataValue.text("Si falla ppar_t != ppar_m + ppar_f, los datos del ISTAC vienen corruptos.")
+        }
+    )
+
+@asset_check(asset="extraer_indicadores_istac", name="check_rango_tasas")
+def check_rango_tasas(extraer_indicadores_istac: str) -> AssetCheckResult:
+    """Valida que los porcentajes (tasas) estén entre 0 y 100."""
+    df = pd.read_csv(extraer_indicadores_istac)
+    
+    # Buscamos valores imposibles en la tasa de paro
+    fuera_de_rango = df[(df['tpar_t'] < 0) | (df['tpar_t'] > 100)]
+    n_errores = len(fuera_de_rango)
+    
+    return AssetCheckResult(
+        passed=n_errores == 0,
+        severity=AssetCheckSeverity.WARN,
+        metadata={
+            "municipios_con_error": MetadataValue.int(n_errores),
+            "valor_max_encontrado": MetadataValue.float(float(df['tpar_t'].max())),
+            "principio_gestalt": MetadataValue.text("Veracidad Visual: Escalas fuera de 0-100% confunden al usuario.")
+        }
+    )
+
+# ── Checks para el Mapa PNG ───────────────────────────────────────────────────
+
+@asset_check(asset="mapa_paro_municipios", name="check_mapa_generado_correctamente")
+def check_mapa_generado_correctamente(mapa_paro_municipios: str) -> AssetCheckResult:
+    """Verifica que el archivo PNG del mapa exista y no sea un archivo vacío."""
+    existe = os.path.exists(mapa_paro_municipios)
+    
+    # Un mapa de Canarias con 88 municipios suele pesar al menos 50KB. 
+    # Si pesa menos, probablemente se grabó un lienzo en blanco.
+    tamano_kb = os.path.getsize(mapa_paro_municipios) / 1024 if existe else 0
+    tamano_ok = tamano_kb > 20.0 
+    
+    return AssetCheckResult(
+        passed=existe and tamano_ok,
+        severity=AssetCheckSeverity.ERROR,
+        metadata={
+            "path": MetadataValue.path(mapa_paro_municipios),
+            "tamano_kb": MetadataValue.float(tamano_kb),
+            "mensaje": MetadataValue.text("El mapa se ha generado pero el archivo parece estar vacío o corrupto.")
         }
     )
