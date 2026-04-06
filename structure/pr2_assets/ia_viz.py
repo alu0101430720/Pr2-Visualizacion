@@ -169,7 +169,9 @@ def template_ia_renta(
     integrar_renta_codislas: pd.DataFrame,
 ) -> dict:
     territorio = Dashboard.TERRITORIO
+    columnas   = ", ".join(integrar_renta_codislas.columns)
 
+    # Calcular municipio focal
     df_filt = integrar_renta_codislas[
         (integrar_renta_codislas["ISLA_clean"] == territorio) &
         (integrar_renta_codislas["Fuente_Renta_Code"] == "SUELDOS_SALARIOS") &
@@ -179,177 +181,221 @@ def template_ia_renta(
         df_filt.groupby("Territorio")["Porcentaje"].mean().idxmax()
         if not df_filt.empty else "Municipio Destacado"
     )
-
-    label_resto   = "Otros municipios"
+    
+    label_resto = "Otros municipios"
     colores_focal = {municipio_top: COLOR_FOCAL, label_resto: COLOR_NEUTRO}
-    # Los colores se resuelven aquí en Python — el LLM solo copia el dict literal.
 
-    descripcion = f"""El dataframe 'df' ya tiene estas columnas relevantes:
-  Año (int), Porcentaje (float), Territorio (str), es_focal (str).
+    template = (
+        "def generar_plot(df):\n"
+        "    # plot = (ggplot(df, aes(...)) + geom_... + ...)\n"
+        "    # return plot\n"
+    )
+    system = (
+        "Eres un experto en la gramática de gráficos y Plotnine. "
+        "Traduce la descripción a código Python ejecutable siguiendo el template. "
+        "Devuelve EXCLUSIVAMENTE el código Python, sin markdown ni explicaciones. "
+        f"La función debe llamarse exactamente 'generar_plot' y recibir 'df'.\nTemplate:\n{template}"
+    )
+    
+    descripcion = f"""Dataset: df con columnas [{columnas}].
 
-La columna 'es_focal' contiene '{municipio_top}' para el municipio destacado
-y '{label_resto}' para el resto. El df ya está ordenado para pintar el foco encima.
+Pasos dentro de la función:
+  1. df = df[df['ISLA_clean'] == '{territorio}']
+  2. df = df[df['Fuente_Renta_Code'] == 'SUELDOS_SALARIOS']
+  3. df = df[df['Territorio'] != '{territorio}']
+  4. Crear columna 'es_focal':
+     df['es_focal'] = df['Territorio'].apply(
+         lambda x: '{municipio_top}' if x == '{municipio_top}' else '{label_resto}')
+  5. Ordenar el dataframe para que el foco se pinte al final (encima):
+     df = df.sort_values('es_focal', ascending=False)
 
-Genera el bloque ggplot que produzca:
-  - geom_line(size=1.2) + geom_point(size=3, fill='white', stroke=1)
-  - aes: x='Año', y='Porcentaje', color='es_focal', group='Territorio'
-  - scale_color_manual(values={colores_focal})
-  - scale_x_continuous(breaks=list(range(2015, 2025, 2)))
-  - expand_limits(y=0)
-  - labs(title='Evolución de Salarios — {territorio}',
-         subtitle='Fuente: ISTAC · Distribución de Renta en Canarias',
-         x='Año', y='Porcentaje (%)', color='Municipio')
-  - theme_minimal() + theme(figure_size=(12, 8),
-                            legend_position='bottom',
-                            legend_title=element_text(fontweight='bold'))
+Estéticas (aes): x='Año', y='Porcentaje', color='es_focal', group='Territorio'
 
-Asigna el resultado a la variable 'plot'.
+Geometría (ESTILO ESTRICTO): 
+  - geom_line(size=1.2)
+  - geom_point(size=3, fill='white', stroke=1)
+
+Escala de color y límites:
+  colores = {colores_focal}
+  scale_color_manual(values=colores)
+  scale_x_continuous(breaks=list(range(2015, 2025, 2)))
+  expand_limits(y=0)
+
+labs(title='Evolución de Salarios por Municipio — {territorio}',
+     subtitle='Fuente: ISTAC · Distribución de Renta en Canarias',
+     x='Año', y='Porcentaje (%)', color='Municipio')
+
+Tema (ESTILO ESTRICTO):
+  theme_minimal() + theme(figure_size=(12, 8), legend_position='bottom', legend_title=element_text(fontweight='bold'))
 """
-    context.log.info(f"Template renta · focal='{municipio_top}'")
-    return {
-        "municipio_top": municipio_top,
-        "label_resto":   label_resto,
-        "payload": {
-            "model": IA_MODEL, "temperature": 0.1, "stream": False,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": descripcion},
-            ],
-        },
-    }
 
+    context.log.info(f"Template renta · territorio='{territorio}' · focal='{municipio_top}'")
+    return {
+        "model": IA_MODEL, "temperature": 0.1, "stream": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": "Completa el template:\n" + descripcion},
+        ],
+    }
 
 @asset
 def template_ia_social(
     context: OpExecutionContext,
     enriquecer_nivelestudios: pd.DataFrame,
-) -> dict:
+) -> dict: # <-- Eliminada la dependencia innecesaria de renta para mejorar paralelismo
     territorio   = Dashboard.TERRITORIO
     col_estudios = next(
         (c for c in enriquecer_nivelestudios.columns
          if "estudio" in c.lower() or "nivel" in c.lower()),
         "Nivel de estudios en curso",
     )
-    orden = ['Sin Estudios/Otros', 'Básicos', 'Medios', 'Superiores']
 
-    descripcion = f"""El dataframe 'df' ya tiene estas columnas relevantes:
-  Periodo (int), n (float), Categoria (Categorical ordenada: {orden}).
+    mapa_categorias = {k: v for k, v in MAPA_EDUCACION.items() if isinstance(k, str)}
 
-Genera el bloque ggplot que produzca:
-  - geom_area(position='fill', alpha=0.85, color='white')
-  - aes: x='Periodo', y='n', fill='Categoria'
-  - scale_fill_brewer(type='qual', palette='Set2')
-  - scale_x_continuous(breaks=list(range(2019, 2026, 2)))
-  - labs(title='Distribución del Nivel de Estudios — {territorio}',
-         subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',
-         x='Año', y='Proporción', fill='Nivel educativo')
-  - theme_minimal() + theme(figure_size=(12, 5), legend_position='right')
-
-Asigna el resultado a la variable 'plot'.
+    template_con_datos = f"""def generar_plot_social(df):
+    import pandas as pd
+    if 'Sexo' in df.columns:
+        df = df[df['Sexo'] == 'Total'].copy()
+    if 'ISLA_clean' in df.columns:
+        df = df[df['ISLA_clean'] == '{territorio}'].copy()
+    
+    _mapa = {mapa_categorias}
+    df['Categoria'] = df['{col_estudios}'].map(_mapa).fillna('Sin Estudios/Otros')
+    
+    orden_educativo = ['Sin Estudios/Otros', 'Básicos', 'Medios', 'Superiores']
+    df['Categoria'] = pd.Categorical(df['Categoria'], categories=orden_educativo, ordered=True)
+    
+    df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
+    df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()
+    df = df.rename(columns={{'Total': 'n'}})
+    
+    # INSERTA AQUI EL BLOQUE GGPLOT (ASIGNALO A LA VARIABLE 'plot')
+    plot = None
+    
+    return plot
 """
-    context.log.info(f"Template social · col='{col_estudios}'")
+
+    system = (
+        "Eres un experto en Plotnine. "
+        "Tu tarea es tomar el template de código proporcionado y completarlo. "
+        "IMPORTANTE: Debes devolver la función COMPLETA. Empieza con `def generar_plot_social(df):`, "
+        "copia toda la lógica de preparación de datos intacta y sustituye 'plot = None' por el bloque de código ggplot. "
+        "Devuelve EXCLUSIVAMENTE código Python válido, sin markdown ni texto extra."
+    )
+    
+    descripcion = f"""Template base:
+{template_con_datos}
+
+Instrucción:
+Reemplaza la línea 'plot = None' con el siguiente bloque exacto de ggplot, manteniendo el resto de la función intacta:
+
+    plot = (
+        ggplot(df, aes(x='Periodo', y='n', fill='Categoria'))
+        + geom_area(position='fill', alpha=0.85, color='white')
+        + scale_fill_brewer(type='qual', palette='Set2')
+        + scale_x_continuous(breaks=list(range(2019, 2026, 2)))
+        + labs(title='Distribución del Nivel de Estudios — {territorio}',
+               subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',
+               x='Año', y='Proporción', fill='Nivel educativo')
+        + theme_minimal()
+        + theme(figure_size=(12, 5), legend_position='right')
+    )
+"""
+    context.log.info(f"Template social · territorio='{territorio}'")
     return {
-        "col_estudios": col_estudios,
-        "payload": {
-            "model": IA_MODEL, "temperature": 0.1, "stream": False,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user",   "content": descripcion},
-            ],
-        },
+        "model": IA_MODEL, "temperature": 0.1, "stream": False,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user",   "content": descripcion},
+        ],
     }
 
+@asset
+def codigo_generado_ia_renta(
+    context: OpExecutionContext,
+    template_ia_renta: dict,
+) -> Output: # <-- Restaurado a Output
+    codigo = _llamar_ia(template_ia_renta, context)
+    _validar_codigo(codigo, "generar_plot")
+    context.log.info("Código renta validado.")
+    return Output(
+        value=codigo,
+        metadata={
+            "longitud":            MetadataValue.int(len(codigo)),
+            "tiene_ggplot":        MetadataValue.bool("ggplot" in codigo),
+            "tiene_geom_line":     MetadataValue.bool("geom_line" in codigo),
+            "tiene_scale_color":   MetadataValue.bool("scale_color" in codigo),
+            "tiene_es_focal":      MetadataValue.bool("es_focal" in codigo),
+            "modelo":              MetadataValue.text(IA_MODEL),
+            "codigo":              MetadataValue.md(f"```python\n{codigo}\n```"),
+        },
+    )
+
+@asset
+def codigo_generado_ia_social(
+    context: OpExecutionContext,
+    template_ia_social: dict,
+) -> Output: # <-- Restaurado a Output y metadatos corregidos
+    codigo = _llamar_ia(template_ia_social, context)
+    _validar_codigo(codigo, "generar_plot_social")
+    context.log.info("Código social validado.")
+    return Output(
+        value=codigo,
+        metadata={
+            "longitud":            MetadataValue.int(len(codigo)),
+            "tiene_ggplot":        MetadataValue.bool("ggplot" in codigo),
+            "tiene_geom_area":     MetadataValue.bool("geom_area" in codigo),
+            "tiene_scale_fill":    MetadataValue.bool("scale_fill" in codigo),
+            "tiene_brewer":        MetadataValue.bool("brewer" in codigo.lower()),
+            "modelo":              MetadataValue.text(IA_MODEL),
+            "codigo":              MetadataValue.md(f"```python\n{codigo}\n```"),
+        },
+    )
 
 @asset
 def visualizacion_ia_png(
     context: OpExecutionContext,
-    template_ia_renta:  dict,
-    template_ia_social: dict,
-    integrar_renta_codislas:  pd.DataFrame,
+    codigo_generado_ia_renta: str,
+    codigo_generado_ia_social: str,
+    integrar_renta_codislas: pd.DataFrame,
     enriquecer_nivelestudios: pd.DataFrame,
-) -> Output:
-    """
-    Llama al LLM en paralelo para ambos gráficos, prepara los datos
-    aquí en Python (no el LLM) y ejecuta los bloques generados.
-    """
+) -> Output: # <-- Restaurado a Output
     warnings.filterwarnings("ignore")
     os.makedirs(DIR_GRAFICOS, exist_ok=True)
-    territorio     = Dashboard.TERRITORIO
-    territorio_key = territorio.lower().replace(" ", "_")
-
-    # ── Preparación de datos (Python, no el LLM) ──────────────────────────────
-
-    municipio_top = template_ia_renta["municipio_top"]
-    label_resto   = template_ia_renta["label_resto"]
-
-    df_renta = (
-        integrar_renta_codislas
-        .loc[
-            (integrar_renta_codislas["ISLA_clean"] == territorio) &
-            (integrar_renta_codislas["Fuente_Renta_Code"] == "SUELDOS_SALARIOS") &
-            (integrar_renta_codislas["Territorio"] != territorio)
-        ]
-        .copy()
-    )
-    df_renta["es_focal"] = df_renta["Territorio"].apply(
-        lambda x: municipio_top if x == municipio_top else label_resto
-    )
-    df_renta = df_renta.sort_values("es_focal", ascending=False)
-
-    mapa_categorias = {k: v for k, v in MAPA_EDUCACION.items() if isinstance(k, str)}
-    orden_educativo = ['Sin Estudios/Otros', 'Básicos', 'Medios', 'Superiores']
-    col_estudios    = template_ia_social["col_estudios"]
-
-    df_social = enriquecer_nivelestudios.copy()
-    if "Sexo" in df_social.columns:
-        df_social = df_social[df_social["Sexo"] == "Total"]
-    if "ISLA_clean" in df_social.columns:
-        df_social = df_social[df_social["ISLA_clean"] == territorio]
-    df_social["Categoria"] = df_social[col_estudios].map(mapa_categorias).fillna("Sin Estudios/Otros")
-    df_social["Categoria"] = pd.Categorical(df_social["Categoria"], categories=orden_educativo, ordered=True)
-    df_social["Total"]     = pd.to_numeric(df_social["Total"], errors="coerce").fillna(0)
-    df_social = (
-        df_social.groupby(["Periodo", "Categoria"])["Total"]
-        .sum().reset_index().rename(columns={"Total": "n"})
-    )
-
-    # ── Llamadas al LLM en paralelo ───────────────────────────────────────────
-
-    context.log.info("Llamando al LLM en paralelo para ambos gráficos...")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        fut_renta  = pool.submit(_llamar_ia, template_ia_renta["payload"],  context)
-        fut_social = pool.submit(_llamar_ia, template_ia_social["payload"], context)
-        bloque_renta  = fut_renta.result()
-        bloque_social = fut_social.result()
-
-    context.log.info(f"Bloque renta ({len(bloque_renta)} chars): {bloque_renta[:120]}…")
-    context.log.info(f"Bloque social ({len(bloque_social)} chars): {bloque_social[:120]}…")
-
-    # ── Ejecución y guardado ──────────────────────────────────────────────────
-
+    territorio = Dashboard.TERRITORIO.lower().replace(" ", "_")
     rutas = []
-    for bloque, df, nombre in [
-        (bloque_renta,  df_renta,  f"visualizacion_ia_renta_{territorio_key}.png"),
-        (bloque_social, df_social, f"visualizacion_ia_social_{territorio_key}.png"),
-    ]:
-        grafico = _ejecutar_bloque(bloque, df, extra_vars={}, context=context)
-        ruta    = os.path.join(DIR_GRAFICOS, nombre)
-        grafico.save(ruta, width=12, height=7, dpi=150)
-        context.log.info(f"Guardado: {ruta}")
-        rutas.append(ruta)
+
+    # Gráfico 1 — renta por municipio
+    context.log.info("Ejecutando código renta generado por IA...")
+    g_renta   = _ejecutar_codigo(
+        codigo_generado_ia_renta, integrar_renta_codislas,
+        "generar_plot", context,
+    )
+    ruta_renta = os.path.join(DIR_GRAFICOS, f"visualizacion_ia_renta_{territorio}.png")
+    g_renta.save(ruta_renta, width=12, height=7, dpi=150)
+    context.log.info(f"Guardado: {ruta_renta}")
+    rutas.append(ruta_renta)
+
+    # Gráfico 2 — nivel de estudios
+    context.log.info("Ejecutando código social generado por IA...")
+    g_social  = _ejecutar_codigo(
+        codigo_generado_ia_social, enriquecer_nivelestudios,
+        "generar_plot_social", context,
+    )
+    ruta_social = os.path.join(DIR_GRAFICOS, f"visualizacion_ia_social_{territorio}.png")
+    g_social.save(ruta_social, width=12, height=7, dpi=150)
+    context.log.info(f"Guardado: {ruta_social}")
+    rutas.append(ruta_social)
 
     sizes = {os.path.basename(r): round(os.path.getsize(r) / 1024, 1) for r in rutas}
     return Output(
         value=rutas,
         metadata={
-            "rutas":           MetadataValue.text(str(rutas)),
-            "sizes_kb":        MetadataValue.text(str(sizes)),
-            "territorio":      MetadataValue.text(territorio),
-            "bloque_renta":    MetadataValue.md(f"```python\n{bloque_renta}\n```"),
-            "bloque_social":   MetadataValue.md(f"```python\n{bloque_social}\n```"),
+            "rutas":      MetadataValue.text(str(rutas)),
+            "sizes_kb":   MetadataValue.text(str(sizes)),
+            "territorio": MetadataValue.text(Dashboard.TERRITORIO),
         },
     )
-
 
 @asset
 def commit_visualizacion_ia(
