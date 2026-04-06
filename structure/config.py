@@ -70,7 +70,7 @@ MAPA_EDUCACION = {
 # ══════════════════════════════════════════════════════════════════════════════
 
 class Dashboard:
-    TERRITORIO       = "Tenerife"          # Territorio a visualizar
+    TERRITORIO       = "El Hierro"          # Territorio a visualizar
     FUENTE           = Fuentes.SALARIOS    # Fuente de renta a mostrar
     DIM_SOCIAL       = "Nacionalidad"      # "Estudios" | "Sexo" | "Nacionalidad"
     COMPARAR_SUBS    = True                # True → cada línea es un subterritorio

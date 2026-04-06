@@ -316,7 +316,7 @@ def template_ia_renta(
         "     subtitle='Fuente: ISTAC · Distribución de Renta en Canarias',\n"
         "     x='Año', y='Porcentaje (%)', color='Municipio')\n\n"
         "theme_minimal() con el título en negrita tamaño 13.\n\n"
-        "Gestalt Punto Focal: solo 'Foco' en naranja, 'Resto' en gris."
+        "En la leyenda indica qué se está graficando."
     )
 
     context.log.info(
