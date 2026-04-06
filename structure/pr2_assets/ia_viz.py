@@ -1,20 +1,25 @@
 """
 assets/ia_viz.py — Pipeline de generación de gráficos mediante IA (Práctica 4).
 
-Assets en orden de ejecución:
-  integrar_renta_codislas ──► template_ia_renta     ──► codigo_generado_ia_renta
-  enriquecer_nivelestudios ─►                                     │
-                              template_ia_social    ──► codigo_generado_ia_social
-                                                                  │
-                                                       visualizacion_ia_png  (genera ambos PNG)
-                                                                  │
-                                                       commit_visualizacion_ia
+Flujo de assets:
+  integrar_renta_codislas ──► template_ia_renta  ──► codigo_generado_ia_renta ──┐
+  enriquecer_nivelestudios ──► template_ia_social ──► codigo_generado_ia_social ─┤
+                                                                                  ▼
+                                                                      visualizacion_ia_png
+                                                                                  │
+                                                                      commit_visualizacion_ia
 
-Gráficos generados:
-  1. visualizacion_ia_renta_<territorio>.png   — evolución de salarios por municipio
-     con Punto Focal (municipio con mayor media resaltado en rojo).
-  2. visualizacion_ia_social_<territorio>.png  — cruce renta × nivel de estudios
-     (área apilada por categoría de estudios, facetada por isla si procede).
+Estrategia:
+  - template_ia_*:          construye el prompt siguiendo la gramática de Wickham.
+                            Los colores del Punto Focal se resuelven en Python con _paleta_focal()
+                            ANTES de enviarlo a la IA, para que el LLM solo copie
+                            un dict ya construido sin inventar nada.
+  - codigo_generado_ia_*:   llama al LLM, limpia la respuesta y valida sintaxis.
+  - _corregir_codigo():     parchea errores sintácticos frecuentes del LLM antes
+                            de ejecutar con exec().
+  - visualizacion_ia_png:   ejecuta el código generado en un entorno controlado
+                            con plotnine + pandas inyectados.
+  - commit_visualizacion_ia: sube los PNG a GitHub Pages.
 """
 
 import os
@@ -33,19 +38,37 @@ from pr2_assets.git_ops import get_github_token
 # ── Constantes del servicio IA ─────────────────────────────────────────────────
 
 IA_URL   = "http://gpu1.esit.ull.es:4000/v1/chat/completions"
-IA_MODEL = "ollama/llama3.1:8b"
+IA_MODEL = "ollama/deepseek-coder:6.7b-instruct-q4_K_M"
 IA_TOKEN = "sk-1234"
 
 
-# ── Helpers privados ───────────────────────────────────────────────────────────
+# ── Colores para Punto Focal ──────────────────────────────────────────────────
+# Para los gráficos de renta usamos Punto Focal (Gestalt):
+# un color de énfasis para el municipio destacado, gris neutro para el resto.
+# El resto de paletas (Set2, Dark2, Blues…) las gestiona plotnine nativamente
+# con scale_fill_brewer / scale_color_brewer — no hace falta redefinirlas.
+
+COLOR_FOCAL  = "#D95F02"  # naranja oscuro — énfasis cálido sin alarmar
+COLOR_NEUTRO = "#CCCCCC"  # gris neutro — fondo / no-foco
+
+
+def _paleta_focal(categorias: list, focal: str) -> dict:
+    """
+    Devuelve {categoria: color} para aplicar Punto Focal (Gestalt).
+    La categoría 'focal' recibe COLOR_FOCAL; el resto, COLOR_NEUTRO.
+    Para cualquier otra necesidad de color usar directamente
+    scale_fill_brewer() o scale_color_brewer() de plotnine.
+    """
+    return {c: (COLOR_FOCAL if c == focal else COLOR_NEUTRO) for c in categorias}
+
+
+# ── Limpieza y corrección del código generado por el LLM ──────────────────────
 
 def _limpiar_codigo(texto: str) -> str:
     """
-    Extrae únicamente el bloque de código Python de la respuesta de la IA.
-    Estrategia en dos pasos:
-      1. Si hay bloque markdown ```python … ```, extraer su contenido.
-      2. Si no, buscar la primera línea 'def ' y devolver desde ahí,
-         descartando prosa previa y líneas de comentario Markdown (###, -).
+    Extrae el bloque de código Python de la respuesta del LLM.
+    1. Busca bloque markdown ```python…```.
+    2. Si no hay, busca la primera línea 'def ' y descarta prosa anterior.
     """
     match = re.search(r"```(?:python)?\s*(.*?)```", texto, re.DOTALL)
     if match:
@@ -53,74 +76,144 @@ def _limpiar_codigo(texto: str) -> str:
 
     lineas = texto.strip().splitlines()
     inicio = next(
-        (i for i, l in enumerate(lineas) if l.strip().startswith("def ")),
-        None,
+        (i for i, l in enumerate(lineas) if l.strip().startswith("def ")), None
     )
     if inicio is not None:
-        lineas_validas = [
+        return "\n".join(
             l for l in lineas[inicio:]
             if not l.strip().startswith("###") and not l.strip().startswith("- ")
-        ]
-        return "\n".join(lineas_validas).strip()
+        ).strip()
 
     return texto.strip()
 
 
-def _validar_codigo(codigo: str, nombre_funcion: str = "generar_plot") -> None:
-    """Lanza ValueError si el código no contiene la función esperada ni ggplot."""
+def _corregir_codigo(codigo: str, context: OpExecutionContext = None) -> str:
+    """
+    Parchea errores sintácticos frecuentes que los LLMs pequeños cometen
+    al generar código plotnine. Se aplica ANTES de exec().
+
+    Correcciones:
+      1. Comillas tipográficas → ASCII.
+      2. scale_*_manual([dict-like]) → scale_*_manual(values={...}).
+      3. scale_*_manual({...}) sin keyword → scale_*_manual(values={...}).
+      4. scale_y_continuous(labels=[lista]) → scale_y_continuous().
+      5. Clave fusionada 'Municipio:#RRGGBB':'#RRGGBB' → 'Municipio':'#RRGGBB'.
+      6. scale_*_manual(values={set}) → scale_*_manual(values={dict reconstruido}).
+    """
+    original = codigo
+
+    # 1. Comillas tipográficas
+    codigo = (codigo
+              .replace("\u2018", "'").replace("\u2019", "'")
+              .replace("\u201c", '"').replace("\u201d", '"'))
+
+    # 2. scale_*_manual([...]) → values={...}
+    def _list_to_dict(m):
+        return f"{m.group(1)}(values={{{m.group(2)}}})"
+    codigo = re.sub(r"(scale_\w+_manual)\(\[([^\]]+)\]\)", _list_to_dict, codigo)
+
+    # 3. scale_*_manual({...}) sin keyword values
+    codigo = re.sub(r"(scale_\w+_manual)\(\{", r"\1(values={", codigo)
+
+    # 4. scale_y_continuous(labels=[lista]) → scale_y_continuous()
+    codigo = re.sub(r"scale_y_continuous\(labels=\[[^\]]*\]\)", "scale_y_continuous()", codigo)
+
+    # 5. Clave fusionada 'Nombre:#RRGGBB': 'valor' → 'Nombre': '#RRGGBB'
+    def _fix_fused(m):
+        q1, nombre, hexcol, q2 = m.group(1), m.group(2).strip(), m.group(3), m.group(4)
+        return q1 + nombre + q1 + ": " + q2 + "#" + hexcol + q2
+
+    _p = (r"(['\"])([^'\"]+):#([0-9A-Fa-f]{3,6})"
+          + r"\1" + r"\s*:\s*" + r"(['\"])[^'\"]*" + r"\4")
+    codigo = re.sub(_p, _fix_fused, codigo)
+
+    # 6. scale_*_manual(values={set sin ':' }) → reconstruir con paleta Dark2
+    def _fix_set(m):
+        func  = m.group(1)
+        items = [i.strip().strip("'\"") for i in m.group(2).split(",") if i.strip()]
+        pal   = ["#1B9E77", "#D95F02", "#7570B3", "#E7298A",
+                 "#66A61E", "#E6AB02", "#A6761D", "#666666"]
+        pairs = ", ".join(f"'{it}': '{pal[i % len(pal)]}'" for i, it in enumerate(items))
+        return f"{func}(values={{{pairs}}})"
+    codigo = re.sub(r"(scale_\w+_manual)\(values=\{([^}:]+)\}\)", _fix_set, codigo)
+
+    if context and codigo != original:
+        context.log.info("_corregir_codigo aplicó correcciones al código del LLM.")
+
+    return codigo
+
+
+def _validar_codigo(codigo: str, nombre_funcion: str) -> None:
+    """Lanza ValueError si el código no contiene la función esperada o ggplot."""
     if f"def {nombre_funcion}" not in codigo:
         raise ValueError(
-            f"El código generado no contiene 'def {nombre_funcion}'. "
-            "La IA no respetó el template.\n" + codigo
+            f"El LLM no generó 'def {nombre_funcion}'. "
+            "No respetó el template.\n" + codigo
         )
     if "ggplot" not in codigo:
-        raise ValueError("El código generado no contiene 'ggplot'.")
+        raise ValueError("El código no contiene 'ggplot' — no es código plotnine válido.")
 
 
 def _llamar_ia(payload: dict, context: OpExecutionContext) -> str:
-    """Realiza la petición al servicio LLM y devuelve el código limpio y validado."""
-    context.log.info(f"Llamando al servicio IA: {IA_URL}")
+    """POST al servicio LLM. Devuelve el bloque de código extraído y limpiado."""
+    context.log.info(f"Llamando al servicio IA ({IA_MODEL})...")
     try:
-        response = requests.post(
+        resp = requests.post(
             IA_URL,
-            headers={
-                "Content-Type":  "application/json",
-                "Authorization": f"Bearer {IA_TOKEN}",
-            },
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {IA_TOKEN}"},
             json=payload,
             timeout=120,
         )
-        response.raise_for_status()
+        resp.raise_for_status()
     except requests.exceptions.RequestException as e:
         raise RuntimeError(f"Error al contactar el servicio IA: {e}") from e
 
-    raw = response.json()["choices"][0]["message"]["content"]
-    context.log.info(f"Respuesta IA recibida · {len(raw)} caracteres.")
+    raw = resp.json()["choices"][0]["message"]["content"]
+    context.log.info(f"Respuesta IA: {len(raw)} caracteres.")
     return _limpiar_codigo(raw)
 
 
-def _ejecutar_codigo(codigo: str, df: pd.DataFrame, nombre_funcion: str = "generar_plot"):
-    """Ejecuta el código en un entorno controlado con plotnine y pandas inyectados."""
+def _ejecutar_codigo(
+    codigo: str,
+    df: pd.DataFrame,
+    nombre_funcion: str,
+    context: OpExecutionContext = None,
+):
+    """
+    Ejecuta el código con exec() en un entorno controlado.
+    Inyecta plotnine completo + pandas.
+    Aplica _corregir_codigo antes de ejecutar.
+    Si falla, muestra el código con números de línea en los logs.
+    """
     import plotnine
-    entorno = {}
-    entorno.update({k: v for k, v in plotnine.__dict__.items() if not k.startswith("_")})
+
+    codigo = _corregir_codigo(codigo, context)
+
+    entorno = {k: v for k, v in plotnine.__dict__.items() if not k.startswith("_")}
     entorno["plotnine"] = plotnine
-    entorno["pd"]       = pd
+    entorno["pd"] = pd
 
     try:
         exec(codigo, entorno)  # noqa: S102
     except Exception as e:
-        raise RuntimeError(f"Error al ejecutar el código de la IA: {e}") from e
+        numerado = "\n".join(f"{i+1:>3}: {l}"
+                             for i, l in enumerate(codigo.splitlines()))
+        raise RuntimeError(
+            f"Error ejecutando código del LLM: {e}\n--- código ---\n{numerado}"
+        ) from e
 
     if nombre_funcion not in entorno:
         raise RuntimeError(
             f"La función '{nombre_funcion}' no quedó definida tras exec(). "
-            "El nombre no coincide con el template."
+            "El LLM usó un nombre distinto al del template."
         )
     return entorno[nombre_funcion](df)
 
 
-# ── Assets ─────────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+# Assets
+# ══════════════════════════════════════════════════════════════════════════════
 
 @asset
 def template_ia_renta(
@@ -128,74 +221,80 @@ def template_ia_renta(
     integrar_renta_codislas: pd.DataFrame,
 ) -> dict:
     """
-    Construye el payload para el gráfico 1: evolución de salarios por municipio.
+    Construye el payload para el gráfico de renta por municipio.
 
-    Gramática de gráficos aplicada:
-      Datos    → df filtrado por isla y fuente SUELDOS_SALARIOS.
-      Estéticas → x=Año, y=Porcentaje, color/group=Territorio.
+    Gramática de Wickham aplicada en la descripción:
+      Datos     → filtrado por isla + fuente SUELDOS_SALARIOS, sin total de isla.
+      Estéticas → x=Año, y=Porcentaje, color=es_focal (2 valores), group=Territorio.
       Geometría → geom_line + geom_point.
-      Escalas   → scale_color_manual con Punto Focal (municipio top en rojo).
-      Etiquetas → título, subtítulo, ejes, leyenda.
-      Gestalt   → Punto Focal: municipio con mayor media resaltado, resto en gris.
-    """
-    columnas   = ", ".join(integrar_renta_codislas.columns)
-    territorio = Dashboard.TERRITORIO
+      Escala    → scale_color_manual con dict precalculado (Punto Focal Gestalt).
+      Etiquetas → title, subtitle, x, y, color.
+      Tema      → theme_minimal, título negrita.
 
-    template_tecnico = """
-def generar_plot(df):
-    # plot = (ggplot(df, aes(...)) + geom_... + ...)
-    # return plot
-"""
-    system_content = (
+    Los colores se calculan aquí en Python con _paleta_focal() y se pasan
+    al prompt como dict literal — el LLM solo los copia, no los inventa.
+    """
+    territorio = Dashboard.TERRITORIO
+    columnas   = ", ".join(integrar_renta_codislas.columns)
+
+    # Calcular municipio focal en Python con datos reales
+    df_filt = integrar_renta_codislas[
+        (integrar_renta_codislas["ISLA_clean"] == territorio) &
+        (integrar_renta_codislas["Fuente_Renta_Code"] == "SUELDOS_SALARIOS") &
+        (integrar_renta_codislas["Territorio"] != territorio)
+    ]
+    municipio_top = (
+        df_filt.groupby("Territorio")["Porcentaje"].mean().idxmax()
+        if not df_filt.empty else ""
+    )
+    # Paleta Punto Focal: Dark2[1] naranja para el foco, gris para el resto
+    # Gestalt — Punto Focal: ruptura de semejanza para dirigir la atención
+    colores_focal = {"Foco": COLOR_FOCAL, "Resto": COLOR_NEUTRO}
+
+    template = (
+        "def generar_plot(df):\n"
+        "    # plot = (ggplot(df, aes(...)) + geom_... + ...)\n"
+        "    # return plot\n"
+    )
+    system = (
         "Eres un experto en la gramática de gráficos y Plotnine. "
-        "Tu tarea es traducir descripciones en lenguaje natural a código Python ejecutable. "
-        f"Usa siempre este template: {template_tecnico}. "
-        "Devuelve EXCLUSIVAMENTE el código Python, sin explicaciones ni markdown. "
-        "La función debe llamarse exactamente 'generar_plot' y recibir un DataFrame 'df'."
+        "Traduce la descripción a código Python ejecutable siguiendo el template. "
+        "Devuelve EXCLUSIVAMENTE el código Python, sin markdown ni explicaciones. "
+        "La función debe llamarse exactamente 'generar_plot' y recibir 'df'."
+        f"\nTemplate:\n{template}"
+    )
+    descripcion = (
+        "Dataset: df con columnas [" + columnas + "].\n\n"
+        "Pasos dentro de la función:\n"
+        "  1. df = df[df['ISLA_clean'] == '" + territorio + "']\n"
+        "  2. df = df[df['Fuente_Renta_Code'] == 'SUELDOS_SALARIOS']\n"
+        "  3. df = df[df['Territorio'] != '" + territorio + "']\n"
+        "  4. Crear columna 'es_focal':\n"
+        "     df['es_focal'] = df['Territorio'].apply(\n"
+        "         lambda x: 'Foco' if x == '" + municipio_top + "' else 'Resto')\n\n"
+        "Estéticas (aes): x='Año', y='Porcentaje', color='es_focal', group='Territorio'\n\n"
+        "Geometría: geom_line(size=0.8) + geom_point(size=1.5)\n\n"
+        "Escala de color — copia este dict EXACTAMENTE:\n"
+        "  colores = " + str(colores_focal) + "\n"
+        "  scale_color_manual(values=colores)\n\n"
+        "scale_x_continuous(breaks=list(range(2015, 2025, 2)))\n\n"
+        "labs(title='Evolución de Salarios por Municipio — " + territorio + "',\n"
+        "     subtitle='Fuente: ISTAC · Distribución de Renta en Canarias',\n"
+        "     x='Año', y='Porcentaje (%)', color='Municipio')\n\n"
+        "theme_minimal() con el título en negrita tamaño 13.\n\n"
+        "Gestalt Punto Focal: solo 'Foco' en naranja, 'Resto' en gris."
     )
 
-    descripcion = f"""
-Dataset: df con columnas [{columnas}].
-
-Filtros a aplicar DENTRO de la función:
-  - Filtrar ISLA_clean == '{territorio}'.
-  - Filtrar Fuente_Renta_Code == 'SUELDOS_SALARIOS'.
-  - Excluir filas donde Territorio == '{territorio}' (solo municipios, no el total).
-
-Estéticas (aes):
-  - x: 'Año' (numérica, eje temporal).
-  - y: 'Porcentaje' (numérica, valor de renta).
-  - color y group: 'Territorio' (categórica, una línea por municipio).
-
-Geometría:
-  - geom_line(size=0.8).
-  - geom_point(size=1.5).
-
-Escalas:
-  - scale_color_manual: calcular dentro de la función el municipio con mayor media
-    de Porcentaje y asignarle '#E63946'. El resto reciben '#CCCCCC'.
-    Esto aplica el principio Gestalt de Punto Focal.
-  - scale_x_continuous con breaks cada 2 años.
-
-Etiquetas (labs):
-  - title: 'Evolución de Salarios por Municipio — {territorio}'.
-  - subtitle: 'Fuente: ISTAC · Distribución de Renta en Canarias'.
-  - x: 'Año', y: 'Porcentaje (%)', color: 'Municipio'.
-
-Tema: theme_minimal(), título en negrita tamaño 13.
-
-Principio Gestalt — Punto Focal:
-  Municipio con mayor media en rojo oscuro, resto en gris claro.
-"""
-    payload = {
+    context.log.info(
+        f"Template renta · territorio='{territorio}' · focal='{municipio_top}'"
+    )
+    return {
         "model": IA_MODEL, "temperature": 0.1, "stream": False,
         "messages": [
-            {"role": "system", "content": system_content},
-            {"role": "user",   "content": f"Completa el template:\n{descripcion}"},
+            {"role": "system", "content": system},
+            {"role": "user",   "content": "Completa el template:\n" + descripcion},
         ],
     }
-    context.log.info(f"Template renta construido · territorio='{territorio}'")
-    return payload
 
 
 @asset
@@ -205,87 +304,77 @@ def template_ia_social(
     integrar_renta_codislas: pd.DataFrame,
 ) -> dict:
     """
-    Construye el payload para el gráfico 2: cruce renta × nivel de estudios.
+    Construye el payload para el gráfico de nivel de estudios.
 
-    Gramática de gráficos aplicada:
-      Datos     → nivelestudios enriquecido, agrupado por Periodo + Categoria.
-      Estéticas → x=Periodo, y=Total, fill=Categoria (área apilada).
-      Geometría → geom_area(position='fill') — proporciones normalizadas a 100%.
-      Escalas   → scale_fill_manual con paleta semántica por nivel educativo.
-      Etiquetas → título, subtítulo, ejes, leyenda.
-      Gestalt   → Similitud: cada color = un nivel educativo constante en todo el gráfico.
+    Gramática de Wickham aplicada:
+      Datos     → nivelestudios agrupado por Periodo + Categoria.
+      Estéticas → x=Periodo, y=n, fill=Categoria.
+      Geometría → geom_area(position='fill').
+      Escala    → scale_fill_brewer(type='qual', palette='Set2') — nativo plotnine.
+      Etiquetas → title, subtitle, x, y, fill.
+      Tema      → theme_minimal, título negrita.
+
+    Gestalt — Similitud: scale_fill_brewer garantiza que cada nivel educativo
+    tiene siempre el mismo color (Set2, apto para daltónicos según Brewer).
+    No se pasa ningún dict de colores — plotnine los gestiona nativamente.
     """
-    territorio  = Dashboard.TERRITORIO
+    territorio   = Dashboard.TERRITORIO
+    columnas     = ", ".join(enriquecer_nivelestudios.columns)
     col_estudios = next(
         (c for c in enriquecer_nivelestudios.columns
          if "estudio" in c.lower() or "nivel" in c.lower()),
-        None,
+        "Nivel de estudios en curso",
     )
-    columnas = ", ".join(enriquecer_nivelestudios.columns)
 
-    template_tecnico = """
-def generar_plot_social(df):
-    # plot = (ggplot(df, aes(...)) + geom_... + ...)
-    # return plot
-"""
-    system_content = (
+    template = (
+        "def generar_plot_social(df):\n"
+        "    # plot = (ggplot(df, aes(...)) + geom_... + ...)\n"
+        "    # return plot\n"
+    )
+    system = (
         "Eres un experto en la gramática de gráficos y Plotnine. "
-        "Tu tarea es traducir descripciones en lenguaje natural a código Python ejecutable. "
-        f"Usa siempre este template: {template_tecnico}. "
-        "Devuelve EXCLUSIVAMENTE el código Python, sin explicaciones ni markdown. "
-        "La función debe llamarse exactamente 'generar_plot_social' y recibir un DataFrame 'df'."
+        "Traduce la descripción a código Python ejecutable siguiendo el template. "
+        "Devuelve EXCLUSIVAMENTE el código Python, sin markdown ni explicaciones. "
+        "La función debe llamarse exactamente 'generar_plot_social' y recibir 'df'."
+        f"\nTemplate:\n{template}"
+    )
+    descripcion = (
+        "Dataset: df con columnas [" + columnas + "].\n"
+        "Columna de nivel de estudios: '" + col_estudios + "'\n\n"
+        "Pasos dentro de la función:\n"
+        "  1. Si existe 'Sexo', filtrar df = df[df['Sexo'] == 'Total']\n"
+        "  2. Si existe 'ISLA_clean', filtrar df = df[df['ISLA_clean'] == '" + territorio + "']\n"
+        "  3. Crear columna 'Categoria' mapeando '" + col_estudios + "' con str.contains:\n"
+        "       contiene 'primaria' o 'Primera etapa' -> 'Basicos'\n"
+        "       contiene 'Segunda etapa'              -> 'Medios'\n"
+        "       contiene 'superior' (ignorar mayusc.) -> 'Superiores'\n"
+        "       cualquier otro                        -> 'Sin Estudios/Otros'\n"
+        "  4. df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)\n"
+        "  5. df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()\n"
+        "  6. Renombrar 'Total' a 'n': df = df.rename(columns={'Total': 'n'})\n\n"
+        "Estéticas (aes): x='Periodo', y='n', fill='Categoria'\n\n"
+        "Geometría: geom_area(position='fill')\n\n"
+        "Escalas:\n"
+        "  scale_fill_brewer(type='qual', palette='Set2')\n"
+        "  scale_x_continuous(breaks=list(range(2019, 2026, 2)))\n\n"
+        "labs(title='Distribución del Nivel de Estudios — " + territorio + "',\n"
+        "     subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',\n"
+        "     x='Año', y='Proporción', fill='Nivel educativo')\n\n"
+        "theme_minimal() con el título en negrita tamaño 13.\n\n"
+        "Gestalt Similitud: scale_fill_brewer(Set2) asigna colores cualitativos de ColorBrewer\n"
+        "de forma consistente — cada nivel educativo siempre tiene el mismo color."
     )
 
-    mapa_str = str(MAPA_EDUCACION)
-    descripcion = f"""
-Dataset: df con columnas [{columnas}].
-{'Columna de nivel de estudios detectada: ' + col_estudios if col_estudios else 'Busca una columna que contenga la palabra estudio o nivel.'}
-
-Pasos de preparación DENTRO de la función (antes de graficar):
-  1. Filtrar ISLA_clean == '{territorio}' si la columna existe.
-  2. Si existe columna 'Sexo', filtrar Sexo == 'Total' para no duplicar filas.
-  3. Mapear los valores de la columna de nivel de estudios usando este diccionario
-     para reducir a 4 categorías: {mapa_str}.
-     Guardar el resultado en una columna nueva llamada 'Categoria'.
-  4. Convertir 'Total' a numérico con pd.to_numeric(..., errors='coerce').fillna(0).
-  5. Agrupar por ['Periodo', 'Categoria'] y sumar 'Total'.
-     Renombrar la suma a 'n'.
-
-Estéticas (aes):
-  - x: 'Periodo' (numérica, eje temporal).
-  - y: 'n' (numérica, frecuencia absoluta).
-  - fill: 'Categoria' (categórica, nivel educativo).
-
-Geometría:
-  - geom_area(position='fill') — áreas apiladas normalizadas al 100%.
-
-Escalas:
-  - scale_fill_manual con estos colores fijos por categoría:
-      'Básicos': '#E63946', 'Medios': '#457B9D',
-      'Superiores': '#2A9D8F', 'Sin Estudios/Otros': '#CCCCCC'.
-  - scale_y_continuous con labels en formato porcentaje (usa lambda x: f'{{x*100:.0f}}%').
-  - scale_x_continuous con breaks cada 2 años.
-
-Etiquetas (labs):
-  - title: 'Distribución del Nivel de Estudios — {territorio}'.
-  - subtitle: 'Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida'.
-  - x: 'Año', y: 'Proporción (%)', fill: 'Nivel educativo'.
-
-Tema: theme_minimal(), título en negrita tamaño 13.
-
-Principio Gestalt — Similitud:
-  Cada color representa siempre el mismo nivel educativo en todo el gráfico.
-  Los colores cálidos (rojo) señalan los niveles básicos como alerta visual.
-"""
-    payload = {
+    context.log.info(
+        f"Template social · territorio='{territorio}' · col='{col_estudios}'"
+    )
+    return {
         "model": IA_MODEL, "temperature": 0.1, "stream": False,
         "messages": [
-            {"role": "system", "content": system_content},
-            {"role": "user",   "content": f"Completa el template:\n{descripcion}"},
+            {"role": "system", "content": system},
+            {"role": "user",   "content": "Completa el template:\n" + descripcion},
         ],
     }
-    context.log.info(f"Template social construido · territorio='{territorio}'")
-    return payload
 
 
 @asset
@@ -293,19 +382,20 @@ def codigo_generado_ia_renta(
     context: OpExecutionContext,
     template_ia_renta: dict,
 ) -> Output:
-    """Llama al LLM con el template de renta y devuelve código Python validado."""
+    """Llama al LLM con el template de renta, limpia y valida el código devuelto."""
     codigo = _llamar_ia(template_ia_renta, context)
     _validar_codigo(codigo, "generar_plot")
     context.log.info("Código renta validado.")
     return Output(
         value=codigo,
         metadata={
-            "longitud_codigo":     MetadataValue.int(len(codigo)),
-            "contiene_ggplot":     MetadataValue.bool("ggplot" in codigo),
-            "contiene_geom_line":  MetadataValue.bool("geom_line" in codigo),
-            "contiene_scale_color":MetadataValue.bool("scale_color_manual" in codigo),
-            "modelo_usado":        MetadataValue.text(IA_MODEL),
-            "codigo_completo":     MetadataValue.md(f"```python\n{codigo}\n```"),
+            "longitud":            MetadataValue.int(len(codigo)),
+            "tiene_ggplot":        MetadataValue.bool("ggplot" in codigo),
+            "tiene_geom_line":     MetadataValue.bool("geom_line" in codigo),
+            "tiene_scale_color":   MetadataValue.bool("scale_color" in codigo),
+            "tiene_es_focal":      MetadataValue.bool("es_focal" in codigo),
+            "modelo":              MetadataValue.text(IA_MODEL),
+            "codigo":              MetadataValue.md(f"```python\n{codigo}\n```"),
         },
     )
 
@@ -315,19 +405,20 @@ def codigo_generado_ia_social(
     context: OpExecutionContext,
     template_ia_social: dict,
 ) -> Output:
-    """Llama al LLM con el template social y devuelve código Python validado."""
+    """Llama al LLM con el template social, limpia y valida el código devuelto."""
     codigo = _llamar_ia(template_ia_social, context)
     _validar_codigo(codigo, "generar_plot_social")
     context.log.info("Código social validado.")
     return Output(
         value=codigo,
         metadata={
-            "longitud_codigo":    MetadataValue.int(len(codigo)),
-            "contiene_ggplot":    MetadataValue.bool("ggplot" in codigo),
-            "contiene_geom_area": MetadataValue.bool("geom_area" in codigo),
-            "contiene_scale_fill":MetadataValue.bool("scale_fill_manual" in codigo),
-            "modelo_usado":       MetadataValue.text(IA_MODEL),
-            "codigo_completo":    MetadataValue.md(f"```python\n{codigo}\n```"),
+            "longitud":            MetadataValue.int(len(codigo)),
+            "tiene_ggplot":        MetadataValue.bool("ggplot" in codigo),
+            "tiene_geom_area":     MetadataValue.bool("geom_area" in codigo),
+            "tiene_scale_fill":    MetadataValue.bool("scale_fill" in codigo),
+            "tiene_brewer":        MetadataValue.bool("brewer" in codigo.lower()),
+            "modelo":              MetadataValue.text(IA_MODEL),
+            "codigo":              MetadataValue.md(f"```python\n{codigo}\n```"),
         },
     )
 
@@ -341,48 +432,45 @@ def visualizacion_ia_png(
     enriquecer_nivelestudios: pd.DataFrame,
 ) -> Output:
     """
-    Ejecuta ambos códigos generados por la IA y guarda los dos PNG en DIR_GRAFICOS.
+    Ejecuta los dos códigos generados por la IA y guarda los PNG en DIR_GRAFICOS.
 
-    Gráfico 1 (renta):   visualizacion_ia_renta_<territorio>.png
-    Gráfico 2 (social):  visualizacion_ia_social_<territorio>.png
-
-    Entorno de ejecución: plotnine completo + pandas inyectados via exec().
+      visualizacion_ia_renta_<territorio>.png
+      visualizacion_ia_social_<territorio>.png
     """
     warnings.filterwarnings("ignore")
     os.makedirs(DIR_GRAFICOS, exist_ok=True)
-
     territorio = Dashboard.TERRITORIO.lower().replace(" ", "_")
     rutas = []
 
-    # ── Gráfico 1: renta por municipio ────────────────────────────────────────
-    context.log.info("Ejecutando código renta...")
-    grafico_renta = _ejecutar_codigo(
-        codigo_generado_ia_renta, integrar_renta_codislas, "generar_plot"
+    # Gráfico 1 — renta por municipio
+    context.log.info("Ejecutando código renta generado por IA...")
+    g_renta   = _ejecutar_codigo(
+        codigo_generado_ia_renta, integrar_renta_codislas,
+        "generar_plot", context,
     )
     ruta_renta = os.path.join(DIR_GRAFICOS, f"visualizacion_ia_renta_{territorio}.png")
-    grafico_renta.save(ruta_renta, width=12, height=7, dpi=150)
-    context.log.info(f"Gráfico renta guardado: {ruta_renta}")
+    g_renta.save(ruta_renta, width=12, height=7, dpi=150)
+    context.log.info(f"Guardado: {ruta_renta}")
     rutas.append(ruta_renta)
 
-    # ── Gráfico 2: nivel de estudios ─────────────────────────────────────────
-    context.log.info("Ejecutando código social...")
-    grafico_social = _ejecutar_codigo(
-        codigo_generado_ia_social, enriquecer_nivelestudios, "generar_plot_social"
+    # Gráfico 2 — nivel de estudios
+    context.log.info("Ejecutando código social generado por IA...")
+    g_social  = _ejecutar_codigo(
+        codigo_generado_ia_social, enriquecer_nivelestudios,
+        "generar_plot_social", context,
     )
     ruta_social = os.path.join(DIR_GRAFICOS, f"visualizacion_ia_social_{territorio}.png")
-    grafico_social.save(ruta_social, width=12, height=7, dpi=150)
-    context.log.info(f"Gráfico social guardado: {ruta_social}")
+    g_social.save(ruta_social, width=12, height=7, dpi=150)
+    context.log.info(f"Guardado: {ruta_social}")
     rutas.append(ruta_social)
 
     sizes = {os.path.basename(r): round(os.path.getsize(r) / 1024, 1) for r in rutas}
-
     return Output(
         value=rutas,
         metadata={
             "rutas":      MetadataValue.text(str(rutas)),
             "sizes_kb":   MetadataValue.text(str(sizes)),
             "territorio": MetadataValue.text(Dashboard.TERRITORIO),
-            "mensaje":    MetadataValue.text("Ambos gráficos generados por IA correctamente."),
         },
     )
 
@@ -392,18 +480,14 @@ def commit_visualizacion_ia(
     context: OpExecutionContext,
     visualizacion_ia_png: list,
 ) -> None:
-    """
-    Hace git add + commit + push de los dos PNG generados por la IA.
-    Tras el push estarán disponibles en GitHub Pages.
-    """
+    """Sube los PNG generados por la IA a GitHub Pages."""
     commit_and_push(
         repo_dir=REPO_DIR,
         remote_url=repo_url(get_github_token()),
         branch=GIT_BRANCH,
         files=visualizacion_ia_png,
-        message=(
-            "practica4: gráficos IA — "
-            + ", ".join(os.path.basename(f) for f in visualizacion_ia_png)
+        message="practica4: gráficos IA — " + ", ".join(
+            os.path.basename(f) for f in visualizacion_ia_png
         ),
         ctx=context,
     )
