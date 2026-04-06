@@ -13,7 +13,7 @@ import re
 
 import pandas as pd
 import geopandas as gpd
-from config import REPO_DIR
+
 from dagster import (
     AssetCheckResult,
     AssetCheckSeverity,
@@ -33,6 +33,7 @@ from config import (
     MAX_LABEL_LENGTH,
     RATIO_ESCALA_MAX,
     DOMINANCE_OTROS_MAX,
+    REPO_DIR,
 )
 
 # ── Funciones Helper DRY ──────────────────────────────────────────────────────
@@ -528,38 +529,42 @@ def check_png_ia_generado(visualizacion_ia_png: list) -> AssetCheckResult:
 
 # Mapas --------------
 
-@asset_check(asset="mapa_rentas_python", name="check_cobertura_municipios_mapa")
+@asset_check(
+    asset="mapa_rentas_python", 
+    name="check_cobertura_municipios_mapa",
+    # Indicamos a Dagster que este check necesita una entrada extra
+    additional_ins={
+        "integrar_renta_codislas": AssetIn() 
+    }
+)
 def check_cobertura_municipios_mapa(
     context, 
-    mapa_rentas_python: str, # Recibe la ruta (salida del asset)
-    integrar_renta_codislas: pd.DataFrame # Recibe los datos originales para validar el cruce
+    mapa_rentas_python: str, # Este es el asset "target"
+    integrar_renta_codislas: pd.DataFrame # Este es el asset adicional
 ) -> AssetCheckResult:
-    """
-    Calcula el porcentaje real de municipios que tienen datos tras el merge.
-    """
-    # 1. Cargar la cartografía
+    """Calcula el porcentaje real de municipios con datos."""
+    
     ruta_geojson = os.path.join(REPO_DIR, "Municipios-2024.json")
     gdf = gpd.read_file(ruta_geojson)
     
-    # 2. Replicar la limpieza mínima para el cruce
+    # Limpieza para el cruce
     gdf['municipio_clean'] = gdf['label'].apply(lambda x: str(x).title().strip())
+    
+    # Usamos el DataFrame que Dagster nos inyecta directamente
     df_data = integrar_renta_codislas.copy()
     df_data['Territorio_clean'] = df_data['Territorio'].apply(lambda x: str(x).title().strip())
     
-    # 3. Calcular cobertura
+    # Cálculo de cobertura
     municipios_con_datos = gdf['municipio_clean'].isin(df_data['Territorio_clean']).sum()
     total_municipios = len(gdf)
     porcentaje = (municipios_con_datos / total_municipios) * 100
     
-    passed = porcentaje >= 95.0
-    
     return AssetCheckResult(
-        passed=passed,
+        passed=porcentaje >= 95.0,
         severity=AssetCheckSeverity.WARN,
         metadata={
             "porcentaje_cobertura": MetadataValue.float(porcentaje),
-            "municipios_faltantes": MetadataValue.int(total_municipios - municipios_con_datos),
-            "principio_gestalt": MetadataValue.text("Figura y Fondo — Si falta >5%, la silueta de Canarias se desdibuja."),
+            "municipios_faltantes": MetadataValue.int(total_municipios - municipios_con_datos)
         }
     )
 
