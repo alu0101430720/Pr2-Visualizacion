@@ -67,6 +67,21 @@ def extraer_indicadores_istac(context: OpExecutionContext, pull_repository: str)
     )
 
 @asset
+def commit_indicadores_istac(
+    context: OpExecutionContext,
+    extraer_indicadores_istac: str, # El CSV generado
+) -> None:
+    """Sube el CSV de indicadores a GitHub."""
+    commit_and_push(
+        repo_dir=REPO_DIR,
+        remote_url=repo_url(get_github_token()),
+        branch=GIT_BRANCH,
+        files=[extraer_indicadores_istac],
+        message="practica4: actualización de indicadores estadísticos del ISTAC",
+        ctx=context,
+    )
+
+@asset
 def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.DataFrame) -> Output:
     """
     Genera un mapa de coropletas de la renta municipal para el año más reciente.
