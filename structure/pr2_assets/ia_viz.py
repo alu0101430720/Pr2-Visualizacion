@@ -254,24 +254,10 @@ def template_ia_renta(
     context: OpExecutionContext,
     integrar_renta_codislas: pd.DataFrame,
 ) -> dict:
-    """
-    Construye el payload para el gráfico de renta por municipio.
-
-    Gramática de Wickham aplicada en la descripción:
-      Datos     → filtrado por isla + fuente SUELDOS_SALARIOS, sin total de isla.
-      Estéticas → x=Año, y=Porcentaje, color=es_focal (2 valores), group=Territorio.
-      Geometría → geom_line + geom_point.
-      Escala    → scale_color_manual con dict precalculado (Punto Focal Gestalt).
-      Etiquetas → title, subtitle, x, y, color.
-      Tema      → theme_minimal, título negrita.
-
-    Los colores se calculan aquí en Python con _paleta_focal() y se pasan
-    al prompt como dict literal — el LLM solo los copia, no los inventa.
-    """
     territorio = Dashboard.TERRITORIO
     columnas   = ", ".join(integrar_renta_codislas.columns)
 
-    # Calcular municipio focal en Python con datos reales
+    # Calcular municipio focal
     df_filt = integrar_renta_codislas[
         (integrar_renta_codislas["ISLA_clean"] == territorio) &
         (integrar_renta_codislas["Fuente_Renta_Code"] == "SUELDOS_SALARIOS") &
@@ -279,11 +265,11 @@ def template_ia_renta(
     ]
     municipio_top = (
         df_filt.groupby("Territorio")["Porcentaje"].mean().idxmax()
-        if not df_filt.empty else ""
+        if not df_filt.empty else "Municipio Destacado"
     )
-    # Paleta Punto Focal: Dark2[1] naranja para el foco, gris para el resto
-    # Gestalt — Punto Focal: ruptura de semejanza para dirigir la atención
-    colores_focal = {"Foco": COLOR_FOCAL, "Resto": COLOR_NEUTRO}
+    
+    label_resto = "Otros municipios"
+    colores_focal = {municipio_top: COLOR_FOCAL, label_resto: COLOR_NEUTRO}
 
     template = (
         "def generar_plot(df):\n"
@@ -294,34 +280,42 @@ def template_ia_renta(
         "Eres un experto en la gramática de gráficos y Plotnine. "
         "Traduce la descripción a código Python ejecutable siguiendo el template. "
         "Devuelve EXCLUSIVAMENTE el código Python, sin markdown ni explicaciones. "
-        "La función debe llamarse exactamente 'generar_plot' y recibir 'df'."
-        f"\nTemplate:\n{template}"
+        f"La función debe llamarse exactamente 'generar_plot' y recibir 'df'.\nTemplate:\n{template}"
     )
-    descripcion = (
-        "Dataset: df con columnas [" + columnas + "].\n\n"
-        "Pasos dentro de la función:\n"
-        "  1. df = df[df['ISLA_clean'] == '" + territorio + "']\n"
-        "  2. df = df[df['Fuente_Renta_Code'] == 'SUELDOS_SALARIOS']\n"
-        "  3. df = df[df['Territorio'] != '" + territorio + "']\n"
-        "  4. Crear columna 'es_focal':\n"
-        "     df['es_focal'] = df['Territorio'].apply(\n"
-        "         lambda x: 'Foco' if x == '" + municipio_top + "' else 'Resto')\n\n"
-        "Estéticas (aes): x='Año', y='Porcentaje', color='es_focal', group='Territorio'\n\n"
-        "Geometría: geom_line(size=0.8) + geom_point(size=1.5)\n\n"
-        "Escala de color — copia este dict EXACTAMENTE:\n"
-        "  colores = " + str(colores_focal) + "\n"
-        "  scale_color_manual(values=colores)\n\n"
-        "scale_x_continuous(breaks=list(range(2015, 2025, 2)))\n\n"
-        "labs(title='Evolución de Salarios por Municipio — " + territorio + "',\n"
-        "     subtitle='Fuente: ISTAC · Distribución de Renta en Canarias',\n"
-        "     x='Año', y='Porcentaje (%)', color='Municipio')\n\n"
-        "theme_minimal() con el título en negrita tamaño 13.\n\n"
-        "En la leyenda indica qué se está graficando."
-    )
+    
+    descripcion = f"""Dataset: df con columnas [{columnas}].
 
-    context.log.info(
-        f"Template renta · territorio='{territorio}' · focal='{municipio_top}'"
-    )
+Pasos dentro de la función:
+  1. df = df[df['ISLA_clean'] == '{territorio}']
+  2. df = df[df['Fuente_Renta_Code'] == 'SUELDOS_SALARIOS']
+  3. df = df[df['Territorio'] != '{territorio}']
+  4. Crear columna 'es_focal':
+     df['es_focal'] = df['Territorio'].apply(
+         lambda x: '{municipio_top}' if x == '{municipio_top}' else '{label_resto}')
+  5. Ordenar el dataframe para que el foco se pinte al final (encima):
+     df = df.sort_values('es_focal', ascending=False)
+
+Estéticas (aes): x='Año', y='Porcentaje', color='es_focal', group='Territorio'
+
+Geometría (ESTILO ESTRICTO): 
+  - geom_line(size=1.2)
+  - geom_point(size=3, fill='white', stroke=1)
+
+Escala de color y límites:
+  colores = {colores_focal}
+  scale_color_manual(values=colores)
+  scale_x_continuous(breaks=list(range(2015, 2025, 2)))
+  expand_limits(y=0)
+
+labs(title='Evolución de Salarios por Municipio — {territorio}',
+     subtitle='Fuente: ISTAC · Distribución de Renta en Canarias',
+     x='Año', y='Porcentaje (%)', color='Municipio')
+
+Tema (ESTILO ESTRICTO):
+  theme_minimal() + theme(figure_size=(12, 8), legend_position='bottom', legend_title=element_text(fontweight='bold'))
+"""
+
+    context.log.info(f"Template renta · territorio='{territorio}' · focal='{municipio_top}'")
     return {
         "model": IA_MODEL, "temperature": 0.1, "stream": False,
         "messages": [
@@ -329,7 +323,6 @@ def template_ia_renta(
             {"role": "user",   "content": "Completa el template:\n" + descripcion},
         ],
     }
-
 
 @asset
 def template_ia_social(
@@ -337,77 +330,59 @@ def template_ia_social(
     enriquecer_nivelestudios: pd.DataFrame,
     integrar_renta_codislas: pd.DataFrame,
 ) -> dict:
-    """
-    Construye el payload para el gráfico de nivel de estudios.
-
-    Gramática de Wickham aplicada:
-      Datos     → nivelestudios agrupado por Periodo + Categoria.
-      Estéticas → x=Periodo, y=n, fill=Categoria.
-      Geometría → geom_area(position='fill').
-      Escala    → scale_fill_brewer(type='qual', palette='Set2') — nativo plotnine.
-      Etiquetas → title, subtitle, x, y, fill.
-      Tema      → theme_minimal, título negrita.
-
-    Gestalt — Similitud: scale_fill_brewer garantiza que cada nivel educativo
-    tiene siempre el mismo color (Set2, apto para daltónicos según Brewer).
-    No se pasa ningún dict de colores — plotnine los gestiona nativamente.
-    """
     territorio   = Dashboard.TERRITORIO
-    columnas     = ", ".join(enriquecer_nivelestudios.columns)
     col_estudios = next(
         (c for c in enriquecer_nivelestudios.columns
          if "estudio" in c.lower() or "nivel" in c.lower()),
         "Nivel de estudios en curso",
     )
 
-    # Precalcular el mapa de categorías en Python y embeber el código
-    # de preparación en el propio template. El LLM SOLO escribe el ggplot.
     mapa_categorias = {k: v for k, v in MAPA_EDUCACION.items() if isinstance(k, str)}
 
-    template_con_datos = (
-        "def generar_plot_social(df):\n"
-        "    import pandas as pd\n"
-        "    # preparacion de datos (NO modificar este bloque)\n"
-        "    if 'Sexo' in df.columns:\n"
-        "        df = df[df['Sexo'] == 'Total'].copy()\n"
-        "    if 'ISLA_clean' in df.columns:\n"
-        "        df = df[df['ISLA_clean'] == '" + territorio + "'].copy()\n"
-        "    _mapa = " + str(mapa_categorias) + "\n"
-        "    df['Categoria'] = df['" + col_estudios + "'].map(_mapa).fillna('Sin Estudios/Otros')\n"
-        "    df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)\n"
-        "    df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()\n"
-        "    df = df.rename(columns={'Total': 'n'})\n"
-        "    # escribe aqui el bloque ggplot (reemplaza la linea siguiente)\n"
-        "    plot = None\n"
-        "    return plot\n"
-    )
+    template_con_datos = f"""def generar_plot_social(df):
+    import pandas as pd
+    if 'Sexo' in df.columns:
+        df = df[df['Sexo'] == 'Total'].copy()
+    if 'ISLA_clean' in df.columns:
+        df = df[df['ISLA_clean'] == '{territorio}'].copy()
+    
+    _mapa = {mapa_categorias}
+    df['Categoria'] = df['{col_estudios}'].map(_mapa).fillna('Sin Estudios/Otros')
+    
+    orden_educativo = ['Sin Estudios/Otros', 'Básicos', 'Medios', 'Superiores']
+    df['Categoria'] = pd.Categorical(df['Categoria'], categories=orden_educativo, ordered=True)
+    
+    df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
+    df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()
+    df = df.rename(columns={{'Total': 'n'}})
+    
+    # escribe aqui el bloque ggplot (reemplaza la linea siguiente)
+    plot = None
+    return plot
+"""
 
     system = (
         "Eres un experto en Plotnine. "
-        "El template ya tiene el codigo de preparacion de datos. "
-        "Tu UNICA tarea: reemplazar 'plot = None' con el bloque ggplot. "
-        "Copia el template completo y sustituye solo esa linea. "
-        "Devuelve EXCLUSIVAMENTE el codigo Python, sin markdown ni explicaciones. "
-        "La funcion debe llamarse exactamente 'generar_plot_social'.\n"
-        "Template:\n" + template_con_datos
+        "El template ya tiene la preparación de datos. Tu ÚNICA tarea es reemplazar 'plot = None' con el bloque ggplot. "
+        "Devuelve EXCLUSIVAMENTE el código Python.\n"
+        f"Template:\n{template_con_datos}"
     )
-    descripcion = (
-        "Reemplaza 'plot = None' con:\n\n"
-        "plot = (\n"
-        "    ggplot(df, aes(x='Periodo', y='n', fill='Categoria'))\n"
-        "    + geom_area(position='fill')\n"
-        "    + scale_fill_brewer(type='qual', palette='Set2')\n"
-        "    + scale_x_continuous(breaks=list(range(2019, 2026, 2)))\n"
-        "    + labs(title='Distribución del Nivel de Estudios — " + territorio + "',\n"
-        "           subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',\n"
-        "           x='Año', y='Proporción', fill='Nivel educativo')\n"
-        "    + theme_minimal()\n"
-        ")\n\n"
-        "Gestalt Similitud: scale_fill_brewer(Set2) — ColorBrewer cualitativo."
-    )
-    context.log.info(
-        f"Template social · territorio='{territorio}' · col='{col_estudios}'"
-    )
+    
+    descripcion = f"""Reemplaza 'plot = None' con:
+
+plot = (
+    ggplot(df, aes(x='Periodo', y='n', fill='Categoria'))
+    + geom_area(position='fill', alpha=0.85, color='white')
+    + scale_fill_brewer(type='qual', palette='Set2')
+    + scale_x_continuous(breaks=list(range(2019, 2026, 2)))
+    + labs(title='Distribución del Nivel de Estudios — {territorio}',
+           subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',
+           x='Año', y='Proporción', fill='Nivel educativo')
+    + theme_minimal()
+    + theme(figure_size=(12, 5), legend_position='right')
+)
+"""
+    context.log.info(f"Template social · territorio='{territorio}'")
     return {
         "model": IA_MODEL, "temperature": 0.1, "stream": False,
         "messages": [
@@ -415,7 +390,6 @@ def template_ia_social(
             {"role": "user",   "content": "Completa el template:\n" + descripcion},
         ],
     }
-
 
 @asset
 def codigo_generado_ia_renta(
