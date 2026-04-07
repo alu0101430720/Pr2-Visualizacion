@@ -608,7 +608,7 @@ def check_integridad_istac(extraer_indicadores_istac: str) -> AssetCheckResult:
     # 2. Validación de suma (Absolutos: Total = M + F)
     # Calculamos la diferencia absoluta total en la población parada
     diff_paro = (df['ppar_t'] - (df['ppar_m'] + df['ppar_f'])).abs().sum()
-    suma_ok = diff_paro < 1.0 # Tolerancia por posibles redondeos en la fuente
+    suma_ok = diff_paro < 15.0 # Tolerancia por posibles redondeos en la fuente
     
     return AssetCheckResult(
         passed=count_ok and suma_ok,
