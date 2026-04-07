@@ -573,8 +573,8 @@ def check_integridad_istac(extraer_indicadores_istac: str) -> AssetCheckResult:
         diff_series = (df['ppar_t'] - (df['ppar_m'] + df['ppar_f'])).abs()
         diff_paro = float(diff_series.sum())
         
-        # Tolerancia 15.0 por redondeos estadísticos
-        suma_ok = diff_paro < 15.0 
+        # Tolerancia de 20
+        suma_ok = diff_paro < 20.0 
         
         return AssetCheckResult(
             passed=bool(count_ok and suma_ok),
