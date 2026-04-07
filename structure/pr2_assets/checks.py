@@ -589,9 +589,6 @@ def check_mapa_png_valido(mapa_rentas_python: str) -> AssetCheckResult:
         }
     )
 
-import os
-import pandas as pd
-from dagster import asset_check, AssetCheckResult, AssetCheckSeverity, MetadataValue
 
 # ── Checks para el CSV de Indicadores ──────────────────────────────────────────
 
