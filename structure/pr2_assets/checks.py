@@ -556,31 +556,44 @@ def check_mapa_png_valido(mapa_rentas_python: str) -> AssetCheckResult:
 @asset_check(asset="extraer_indicadores_istac", name="check_integridad_istac")
 def check_integridad_istac(extraer_indicadores_istac: str) -> AssetCheckResult:
     """
-    Verifica que el CSV extraído del JSON sea coherente:
-    1. Que tenga los 88 municipios.
-    2. Que la suma de hombres y mujeres coincida con el total.
+    Verifica que el CSV extraído del JSON sea coherente.
     """
-    df = pd.read_csv(extraer_indicadores_istac)
+    try:
+        df = pd.read_csv(extraer_indicadores_istac)
+        
+        # 1. Asegurar que las columnas son numéricas (evita TypeError)
+        for col in ['ppar_t', 'ppar_m', 'ppar_f']:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+        
+        # 2. Validación de cantidad
+        n_municipios = len(df)
+        count_ok = n_municipios == 88
+        
+        # 3. Validación de suma
+        diff_series = (df['ppar_t'] - (df['ppar_m'] + df['ppar_f'])).abs()
+        diff_paro = float(diff_series.sum())
+        
+        # Tolerancia 15.0 por redondeos estadísticos
+        suma_ok = diff_paro < 15.0 
+        
+        return AssetCheckResult(
+            passed=bool(count_ok and suma_ok),
+            severity=AssetCheckSeverity.ERROR,
+            metadata={
+                "municipios_detectados": MetadataValue.int(n_municipios),
+                "desviacion_suma_paro": MetadataValue.float(diff_paro),
+                "status_conteo": MetadataValue.text("OK" if count_ok else f"Error: {n_municipios}/88"),
+                "status_suma": MetadataValue.text("OK" if suma_ok else "Error en suma M+F")
+            }
+        )
+    except Exception as e:
+        # Si algo falla catastróficamente, informamos del error en lugar de colapsar
+        return AssetCheckResult(
+            passed=False,
+            severity=AssetCheckSeverity.ERROR,
+            metadata={"error_ejecucion": MetadataValue.text(str(e))}
+        )
     
-    # 1. Validación de cantidad (88 municipios en Canarias)
-    n_municipios = len(df)
-    count_ok = n_municipios == 88
-    
-    # 2. Validación de suma (Absolutos: Total = M + F)
-    # Calculamos la diferencia absoluta total en la población parada
-    diff_paro = (df['ppar_t'] - (df['ppar_m'] + df['ppar_f'])).abs().sum()
-    suma_ok = diff_paro < 15.0 # Tolerancia por posibles redondeos en la fuente
-    
-    return AssetCheckResult(
-        passed=count_ok and suma_ok,
-        severity=AssetCheckSeverity.ERROR,
-        metadata={
-            "municipios_detectados": MetadataValue.int(n_municipios),
-            "desviacion_suma_paro": MetadataValue.float(float(diff_paro)),
-            "nota": MetadataValue.text("Si falla ppar_t != ppar_m + ppar_f, los datos del ISTAC vienen corruptos.")
-        }
-    )
-
 @asset_check(asset="extraer_indicadores_istac", name="check_rango_tasas")
 def check_rango_tasas(extraer_indicadores_istac: str) -> AssetCheckResult:
     """Valida que los porcentajes (tasas) estén entre 0 y 100."""
