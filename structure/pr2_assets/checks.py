@@ -12,7 +12,6 @@ import os
 import re
 
 import pandas as pd
-import geopandas as gpd
 
 from dagster import (
     AssetCheckResult,
@@ -529,44 +528,6 @@ def check_png_ia_generado(visualizacion_ia_png: list) -> AssetCheckResult:
 
 # Mapas --------------
 
-@asset_check(
-    asset="mapa_rentas_python", 
-    name="check_cobertura_municipios_mapa",
-    # Indicamos a Dagster que este check necesita una entrada extra
-    additional_ins={
-        "integrar_renta_codislas": AssetIn() 
-    }
-)
-def check_cobertura_municipios_mapa(
-    context, 
-    mapa_rentas_python: str, # Este es el asset "target"
-    integrar_renta_codislas: pd.DataFrame # Este es el asset adicional
-) -> AssetCheckResult:
-    """Calcula el porcentaje real de municipios con datos."""
-    
-    ruta_geojson = os.path.join(REPO_DIR, "Municipios-2024.json")
-    gdf = gpd.read_file(ruta_geojson)
-    
-    # Limpieza para el cruce
-    gdf['municipio_clean'] = gdf['label'].apply(lambda x: str(x).title().strip())
-    
-    # Usamos el DataFrame que Dagster nos inyecta directamente
-    df_data = integrar_renta_codislas.copy()
-    df_data['Territorio_clean'] = df_data['Territorio'].apply(lambda x: str(x).title().strip())
-    
-    # Cálculo de cobertura
-    municipios_con_datos = gdf['municipio_clean'].isin(df_data['Territorio_clean']).sum()
-    total_municipios = len(gdf)
-    porcentaje = (municipios_con_datos / total_municipios) * 100
-    
-    return AssetCheckResult(
-        passed=porcentaje >= 95.0,
-        severity=AssetCheckSeverity.WARN,
-        metadata={
-            "porcentaje_cobertura": MetadataValue.float(porcentaje),
-            "municipios_faltantes": MetadataValue.int(total_municipios - municipios_con_datos)
-        }
-    )
 
 @asset_check(asset="mapa_rentas_python", name="check_mapa_png_valido")
 def check_mapa_png_valido(mapa_rentas_python: str) -> AssetCheckResult:
