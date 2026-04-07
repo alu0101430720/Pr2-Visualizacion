@@ -708,9 +708,7 @@ def visualizacion_ia_png(
 
     """
 
-    Ejecuta los dos códigos generados por la IA y guarda los PNG en DIR_GRAFICOS.
-
-
+    Ejecuta código generado por la IA y guarda el PNG en DIR_GRAFICOS.
 
       visualizacion_ia_renta_<territorio>.png
 
