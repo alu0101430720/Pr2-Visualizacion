@@ -704,8 +704,6 @@ def visualizacion_ia_png(
 
     integrar_renta_codislas: pd.DataFrame,
 
-    enriquecer_nivelestudios: pd.DataFrame,
-
 ) -> Output:
 
     """
