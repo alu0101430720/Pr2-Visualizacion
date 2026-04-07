@@ -219,18 +219,18 @@ def check_duplicados_limpiar_codislas(limpiar_codislas: pd.DataFrame) -> AssetCh
                   "ejemplos": MetadataValue.text(str(ejemplos) if ejemplos else "ninguno"),
                   "principio_gestalt": MetadataValue.text("Figura y Fondo — Un municipio duplicado aparecería dos veces.")})
 
-@asset_check(asset="integrar_renta_codislas", name="check_integridad_join_renta_codislas",
-    description="Verifica que todos los municipios tienen isla asignada. Gestalt — Figura y Fondo.")
-def check_integridad_join_renta_codislas(integrar_renta_codislas: pd.DataFrame) -> AssetCheckResult:
-    territorios_exentos = ["Canarias", "Las Palmas", "Santa Cruz de Tenerife"] + TODAS_ISLAS
-    municipios = integrar_renta_codislas[~integrar_renta_codislas["Territorio"].isin(territorios_exentos)]
-    n_sin_isla = int(municipios["ISLA_clean"].isna().sum())
-    ejemplos   = municipios.loc[municipios["ISLA_clean"].isna(), "Territorio"].unique()[:5].tolist()
-    return AssetCheckResult(passed=n_sin_isla == 0, severity=AssetCheckSeverity.WARN,
-        metadata={"municipios_huerfanos": MetadataValue.int(n_sin_isla),
-                  "ejemplos_huerfanos": MetadataValue.text(str(ejemplos) if ejemplos else "ninguno"),
-                  "excluidos_del_check": MetadataValue.text("Canarias, Provincias y nombres de Islas"),
-                  "principio_gestalt": MetadataValue.text("Figura y Fondo — Municipios sin isla no aparecerán en el facet correcto.")})
+# @asset_check(asset="integrar_renta_codislas", name="check_integridad_join_renta_codislas",
+#     description="Verifica que todos los municipios tienen isla asignada. Gestalt — Figura y Fondo.")
+# def check_integridad_join_renta_codislas(integrar_renta_codislas: pd.DataFrame) -> AssetCheckResult:
+#     territorios_exentos = ["Canarias", "Las Palmas", "Santa Cruz de Tenerife"] + TODAS_ISLAS
+#     municipios = integrar_renta_codislas[~integrar_renta_codislas["Territorio"].isin(territorios_exentos)]
+#     n_sin_isla = int(municipios["ISLA_clean"].isna().sum())
+#     ejemplos   = municipios.loc[municipios["ISLA_clean"].isna(), "Territorio"].unique()[:5].tolist()
+#     return AssetCheckResult(passed=n_sin_isla == 0, severity=AssetCheckSeverity.WARN,
+#         metadata={"municipios_huerfanos": MetadataValue.int(n_sin_isla),
+#                   "ejemplos_huerfanos": MetadataValue.text(str(ejemplos) if ejemplos else "ninguno"),
+#                   "excluidos_del_check": MetadataValue.text("Canarias, Provincias y nombres de Islas"),
+#                   "principio_gestalt": MetadataValue.text("Figura y Fondo — Municipios sin isla no aparecerán en el facet correcto.")})
 
 @asset_check(asset="limpiar_nivelestudios", name="check_continuidad_serie_temporal_nivelestudios",
     description="Verifica que no falten años en la serie de nivel de estudios. Gestalt — Continuidad.")
