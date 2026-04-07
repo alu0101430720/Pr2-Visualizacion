@@ -702,8 +702,6 @@ def visualizacion_ia_png(
 
     codigo_generado_ia_renta: str,
 
-    codigo_generado_ia_social: str,
-
     integrar_renta_codislas: pd.DataFrame,
 
     enriquecer_nivelestudios: pd.DataFrame,
@@ -718,8 +716,6 @@ def visualizacion_ia_png(
 
       visualizacion_ia_renta_<territorio>.png
 
-      visualizacion_ia_social_<territorio>.png
-
     """
 
     warnings.filterwarnings("ignore")
@@ -730,9 +726,7 @@ def visualizacion_ia_png(
 
     rutas = []
 
-
-
-    # Gráfico 1 — renta por municipio
+    # Gráfico renta por municipio
 
     context.log.info("Ejecutando código renta generado por IA...")
 
@@ -751,28 +745,6 @@ def visualizacion_ia_png(
     context.log.info(f"Guardado: {ruta_renta}")
 
     rutas.append(ruta_renta)
-
-
-
-    # Gráfico 2 — nivel de estudios
-
-    context.log.info("Ejecutando código social generado por IA...")
-
-    g_social  = _ejecutar_codigo(
-
-        codigo_generado_ia_social, enriquecer_nivelestudios,
-
-        "generar_plot_social", context,
-
-    )
-
-    ruta_social = os.path.join(DIR_GRAFICOS, f"visualizacion_ia_social_{territorio}.png")
-
-    g_social.save(ruta_social, width=12, height=7, dpi=150)
-
-    context.log.info(f"Guardado: {ruta_social}")
-
-    rutas.append(ruta_social)
 
 
 
