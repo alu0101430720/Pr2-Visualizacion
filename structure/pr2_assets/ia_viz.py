@@ -8,9 +8,9 @@ Flujo de assets:
 
   integrar_renta_codislas ──► template_ia_renta  ──► codigo_generado_ia_renta ──┐
 
-  enriquecer_nivelestudios ──► template_ia_social ──► codigo_generado_ia_social ─┤
+                                                                                ┤
 
-                                                                                  ▼
+                                                                                ▼
 
                                                                       visualizacion_ia_png
 
@@ -648,156 +648,6 @@ Tema (ESTILO ESTRICTO):
 
     }
 
-
-
-@asset
-
-def template_ia_social(
-
-    context: OpExecutionContext,
-
-    enriquecer_nivelestudios: pd.DataFrame,
-
-    integrar_renta_codislas: pd.DataFrame,
-
-) -> dict:
-
-    territorio   = Dashboard.TERRITORIO
-
-    col_estudios = next(
-
-        (c for c in enriquecer_nivelestudios.columns
-
-         if "estudio" in c.lower() or "nivel" in c.lower()),
-
-        "Nivel de estudios en curso",
-
-    )
-
-
-
-    mapa_categorias = {k: v for k, v in MAPA_EDUCACION.items() if isinstance(k, str)}
-
-
-
-    # Template con el cascarón de la función completa
-
-    template_con_datos = f"""def generar_plot_social(df):
-
-    import pandas as pd
-
-    if 'Sexo' in df.columns:
-
-        df = df[df['Sexo'] == 'Total'].copy()
-
-    if 'ISLA_clean' in df.columns:
-
-        df = df[df['ISLA_clean'] == '{territorio}'].copy()
-
-   
-
-    _mapa = {mapa_categorias}
-
-    df['Categoria'] = df['{col_estudios}'].map(_mapa).fillna('Sin Estudios/Otros')
-
-   
-
-    orden_educativo = ['Sin Estudios/Otros', 'Básicos', 'Medios', 'Superiores']
-
-    df['Categoria'] = pd.Categorical(df['Categoria'], categories=orden_educativo, ordered=True)
-
-   
-
-    df['Total'] = pd.to_numeric(df['Total'], errors='coerce').fillna(0)
-
-    df = df.groupby(['Periodo', 'Categoria'])['Total'].sum().reset_index()
-
-    df = df.rename(columns={{'Total': 'n'}})
-
-   
-
-    # INSERTA AQUI EL BLOQUE GGPLOT (ASIGNALO A LA VARIABLE 'plot')
-
-    plot = None
-
-   
-
-    return plot
-
-"""
-
-
-
-    # Hacemos especial énfasis en devolver la función COMPLETA
-
-    system = (
-
-        "Eres un experto en Plotnine. "
-
-        "Tu tarea es tomar el template de código proporcionado y completarlo. "
-
-        "IMPORTANTE: Debes devolver la función COMPLETA. Empieza con `def generar_plot_social(df):`, "
-
-        "copia toda la lógica de preparación de datos intacta y sustituye 'plot = None' por el bloque de código ggplot. "
-
-        "Devuelve EXCLUSIVAMENTE código Python válido, sin markdown ni texto extra."
-
-    )
-
-   
-
-    descripcion = f"""Template base:
-
-{template_con_datos}
-
-
-
-Instrucción:
-
-Reemplaza la línea 'plot = None' con el siguiente bloque exacto de ggplot, manteniendo el resto de la función intacta:
-
-
-
-    plot = (
-
-        ggplot(df, aes(x='Periodo', y='n', fill='Categoria'))
-
-        + geom_area(position='fill', alpha=0.85, color='white')
-
-        + scale_fill_brewer(type='qual', palette='Set2')
-
-        + scale_x_continuous(breaks=list(range(2019, 2026, 2)))
-
-        + labs(title='Distribución del Nivel de Estudios — {territorio}',
-
-               subtitle='Fuente: ISTAC · Encuesta de Nivel y Condiciones de Vida',
-
-               x='Año', y='Proporción', fill='Nivel educativo')
-
-        + theme_minimal()
-
-        + theme(figure_size=(12, 5), legend_position='right')
-
-    )
-
-"""
-
-    context.log.info(f"Template social · territorio='{territorio}'")
-
-    return {
-
-        "model": IA_MODEL, "temperature": 0.1, "stream": False,
-
-        "messages": [
-
-            {"role": "system", "content": system},
-
-            {"role": "user",   "content": descripcion},
-
-        ],
-
-    }
-
 @asset
 
 def codigo_generado_ia_renta(
@@ -831,52 +681,6 @@ def codigo_generado_ia_renta(
             "tiene_scale_color":   MetadataValue.bool("scale_color" in codigo),
 
             "tiene_es_focal":      MetadataValue.bool("es_focal" in codigo),
-
-            "modelo":              MetadataValue.text(IA_MODEL),
-
-            "codigo":              MetadataValue.md(f"```python\n{codigo}\n```"),
-
-        },
-
-    )
-
-
-
-
-
-@asset
-
-def codigo_generado_ia_social(
-
-    context: OpExecutionContext,
-
-    template_ia_social: dict,
-
-) -> Output:
-
-    """Llama al LLM con el template social, limpia y valida el código devuelto."""
-
-    codigo = _llamar_ia(template_ia_social, context)
-
-    _validar_codigo(codigo, "generar_plot_social")
-
-    context.log.info("Código social validado.")
-
-    return Output(
-
-        value=codigo,
-
-        metadata={
-
-            "longitud":            MetadataValue.int(len(codigo)),
-
-            "tiene_ggplot":        MetadataValue.bool("ggplot" in codigo),
-
-            "tiene_geom_area":     MetadataValue.bool("geom_area" in codigo),
-
-            "tiene_scale_fill":    MetadataValue.bool("scale_fill" in codigo),
-
-            "tiene_brewer":        MetadataValue.bool("brewer" in codigo.lower()),
 
             "modelo":              MetadataValue.text(IA_MODEL),
 
