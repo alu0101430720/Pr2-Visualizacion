@@ -4,8 +4,6 @@
 
 Se cuenta con un notebook en el que see integran los checks y se realiza el lanzamiento de Dagster.
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1V4TtK1wVorjxxJ6tDbUHWayt58TlDeVh?usp=sharing)
-
 Este repositorio cuenta con:
 1. Los datasets originales aportados en la tarea.
 2. Directorio datasets-clean, donde se suben los datasets procesados.
