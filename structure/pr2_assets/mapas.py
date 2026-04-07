@@ -211,7 +211,7 @@ def mapa_rentas_python(context: OpExecutionContext, integrar_renta_codislas: pd.
     mapa = (
         ggplot(gdf_final)
         + geom_map(aes(fill="Porcentaje")) # Mapeo de variable a estética fill 
-        + scale_fill_cmap(cmap_name="viridis")
+        + scale_fill_cmap(cmap_name="RdYlGn")
         + theme_void()
         + labs(
             title=f"Distribución de Rentas por Municipio ({ultimo_año})",
