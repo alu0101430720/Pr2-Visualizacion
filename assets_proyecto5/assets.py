@@ -1,6 +1,8 @@
-from dagster import asset, get_dagster_logger
 import os
 import shutil
+import glob
+import pandas as pd
+from dagster import asset, get_dagster_logger
 import config
 from git import pull_or_clone_repo
 
@@ -30,7 +32,7 @@ def ingestar_datos_p5() -> str:
     logger = get_dagster_logger()
     
     # Origen y destino de los datos
-    source_data_dir = config.DATA_P5_DIR
+    source_data_dir = config.source_data_dir
     target_data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
     
     logger.info(f"Ingestando datos desde {source_data_dir} hacia el repositorio en {target_data_dir}")
@@ -48,3 +50,61 @@ def ingestar_datos_p5() -> str:
         logger.warning(f"La carpeta origen {source_data_dir} no existe. No se pudo ingestar.")
 
     return target_data_dir
+
+@asset(deps=[ingestar_datos_p5])
+def preprocesar_datos_p5() -> str:
+    """
+    Asset para preprocesar los datos CSV de data-P5.
+    Limpia números, corrige nombres de lugares, y elimina columnas espurias.
+    Guarda los resultados por separado en una subcarpeta 'processed'.
+    """
+    logger = get_dagster_logger()
+    
+    # Usamos la ruta destino donde se copió data-P5 dentro del repositorio
+    source_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    processed_dir = os.path.join(source_dir, "processed")
+    os.makedirs(processed_dir, exist_ok=True)
+    
+    csv_files = glob.glob(os.path.join(source_dir, "*.csv"))
+    
+    for file_path in csv_files:
+        filename = os.path.basename(file_path)
+        logger.info(f"Procesando {filename}...")
+        try:
+            df = pd.read_csv(file_path)
+            
+            # 1. Limpiar espacios en nombres de columnas
+            df.columns = df.columns.str.strip()
+            
+            # Identificar columnas tipo 'object' (strings)
+            string_cols = df.select_dtypes(include=['object']).columns
+            
+            for col in string_cols:
+                # 2. Formateo de lugares: INE a menudo exporta "Gomera, La" o "Palmas, Las"
+                df[col] = df[col].replace(r'(?i)^([^,]+),\s*(La|El|Los|Las)$', r'\2 \1', regex=True)
+                
+                # 3. Reemplazar formato numérico de csv español (coma por punto)
+                # Verifica si toda la celda es 'numero,numero' o '-numero,numero'
+                df[col] = df[col].replace(r'^(-?\d+),(\d+)$', r'\1.\2', regex=True)
+                
+                # Intentar conversión a numérico para poder operar mejor en Pandas
+                try:
+                    df[col] = df[col].astype(float)
+                except ValueError:
+                    pass
+
+            # 4. Eliminar columnas espurias
+            # Generalmente son 'Unnamed' creadas al final de líneas mal formadas o columnas totalmente vacias
+            cols_to_drop = [c for c in df.columns if 'Unnamed' in str(c)]
+            df = df.drop(columns=cols_to_drop, errors='ignore')
+            df = df.dropna(how='all', axis=1) # Limpiar columnas vacías
+            
+            # Guardar el dataset limpio
+            out_path = os.path.join(processed_dir, filename)
+            df.to_csv(out_path, index=False)
+            logger.info(f"Procesamiento exitoso y guardado en: {out_path}")
+            
+        except Exception as e:
+            logger.error(f"Error procesando el archivo {filename}: {str(e)}")
+            
+    return processed_dir
