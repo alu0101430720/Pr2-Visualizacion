@@ -44,8 +44,7 @@ def ingestar_datos_p5() -> str:
             logger.info("Datos copiados al repositorio local.")
         else:
             logger.info("Los datos ya existen en el repositorio. Verificando/Actualizando...")
-            import distutils.dir_util
-            distutils.dir_util.copy_tree(source_data_dir, target_data_dir)
+            shutil.copytree(source_data_dir, target_data_dir, dirs_exist_ok=True)
     else:
         logger.warning(f"La carpeta origen {source_data_dir} no existe. No se pudo ingestar.")
 
