@@ -5,13 +5,13 @@ from dagster import asset_check, AssetCheckResult, MetadataValue
 import warnings
 from assets import preprocesar_datos_p5
 
-# Mapeo de Municipios de Canarias por Isla (los más estándar)
+# Mapeo de Municipios de Canarias por Isla
 MUNICIPIOS_POR_ISLA = {
     "Tenerife": {
         "Adeje", "Arafo", "Arico", "Arona", "Buenavista del Norte", "Candelaria",
         "Fasnia", "Garachico", "Granadilla de Abona", "La Guancha", "Guía de Isora",
         "Güímar", "Icod de los Vinos", "La Matanza de Acentejo", "La Orotava",
-        "Puerto de la Cruz", "Los Realejos", "El Rosario", "San Cristóbal de La Laguna",
+        "Puerto de la Cruz", "Puerto de La Cruz", "Los Realejos", "El Rosario", "San Cristóbal de La Laguna",
         "San Juan de la Rambla", "San Miguel de Abona", "Santa Cruz de Tenerife",
         "Santa Úrsula", "Santiago del Teide", "El Sauzal", "Los Silos", "Tacoronte",
         "El Tanque", "Tegueste", "La Victoria de Acentejo", "Vilaflor", "Vilaflor de Chasna"
@@ -24,9 +24,9 @@ MUNICIPIOS_POR_ISLA = {
         "Valsequillo de Gran Canaria", "Vega de San Mateo"
     },
     "La Palma": {
-        "Barlovento", "Breña Alta", "Breña Baja", "Fuencaliente de la Palma", "Garafía",
+        "Barlovento", "Breña Alta", "Breña Baja", "Fuencaliente de la Palma", "Fuencaliente de La Palma", "Garafía",
         "Los Llanos de Aridane", "El Paso", "Puntagorda", "Puntallana", "San Andrés y Sauces",
-        "Santa Cruz de la Palma", "Tazacorte", "Tijarafe", "Villa de Mazo"
+        "Santa Cruz de la Palma", "Santa Cruz de La Palma", "Tazacorte", "Tijarafe", "Villa de Mazo"
     },
     "Lanzarote": {
         "Arrecife", "Haría", "San Bartolomé", "Teguise", "Tías", "Tinajo", "Yaiza"
@@ -35,7 +35,7 @@ MUNICIPIOS_POR_ISLA = {
         "Antigua", "Betancuria", "La Oliva", "Pájara", "Puerto del Rosario", "Tuineje"
     },
     "La Gomera": {
-        "Agulo", "Alajeró", "Hermigua", "San Sebastián de la Gomera", "Valle Gran Rey", "Vallehermoso"
+        "Agulo", "Alajeró", "Hermigua", "San Sebastián de la Gomera", "San Sebastián de La Gomera", "Valle Gran Rey", "Vallehermoso"
     },
     "El Hierro": {
         "La Frontera", "Frontera", "El Pinar de El Hierro", "Pinar de El Hierro, El", "Valverde"
@@ -69,7 +69,7 @@ def check_ausencia_nulos(context, preprocesar_datos_p5: str):
     csv_files = glob.glob(os.path.join(preprocesar_datos_p5, "*.csv"))
     
     total_nulos = 0
-    report_md = "### Reporte de Nulos Geštalt\n\n| Dataset | Total Nulos |\n|---------|-------------|\n"
+    report_md = "### Reporte de Nulos Gestalt\n\n| Dataset | Total Nulos |\n|---------|-------------|\n"
     
     for file in csv_files:
         df = pd.read_csv(file)
@@ -81,7 +81,7 @@ def check_ausencia_nulos(context, preprocesar_datos_p5: str):
         report_md += f"| `{os.path.basename(file)}` | {n_nulos} ({status}) |\n"
         
     return AssetCheckResult(
-        passed=(total_nulos == 0),
+        passed=bool(total_nulos == 0),
         metadata={
             "Resumen_Nulos": MetadataValue.md(report_md)
         }
@@ -125,7 +125,7 @@ def check_conteo_municipios(context, preprocesar_datos_p5: str):
         
         for isla, expected in ESPERADOS_ISLAS.items():
             if is_sc_only and isla not in ISLAS_SC:
-                continue # Ignoramos las islas de Las Palmas
+                continue
                 
             found = len(conteo_por_isla[isla])
             if found != expected:

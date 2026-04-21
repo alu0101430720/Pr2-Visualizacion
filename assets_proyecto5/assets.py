@@ -79,6 +79,14 @@ def preprocesar_datos_p5() -> str:
             string_cols = df.select_dtypes(include=['object']).columns
             
             for col in string_cols:
+                # 1.a Trim espacios en blanco para limpiar la cadena completamente antes del regex
+                try:
+                    # Usar str.strip() si es posible y reemplazar 'nan' strings a verdaderos NaN
+                    mask = df[col].notna()
+                    df.loc[mask, col] = df.loc[mask, col].astype(str).str.strip()
+                except Exception:
+                    pass
+                
                 # 2. Formateo de lugares: INE a menudo exporta "Gomera, La" o "Palmas, Las"
                 df[col] = df[col].replace(r'(?i)^([^,]+),\s*(La|El|Los|Las)$', r'\2 \1', regex=True)
                 
