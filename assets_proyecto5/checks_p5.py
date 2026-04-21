@@ -87,45 +87,58 @@ def check_ausencia_nulos(context, preprocesar_datos_p5: str):
         }
     )
 
-@asset_check(asset=preprocesar_datos_p5, description="Verifica la exactitud del conteo de municipios por Isla Mencionada.")
+@asset_check(asset=preprocesar_datos_p5, description="Verifica la exactitud del conteo de municipios por Isla, filtrando por provincia según el nombre.")
 def check_conteo_municipios(context, preprocesar_datos_p5: str):
     csv_files = glob.glob(os.path.join(preprocesar_datos_p5, "*.csv"))
     if not csv_files:
         return AssetCheckResult(passed=False, metadata={"Error": MetadataValue.md("No se encontraron CSVs.")})
     
-    # Evaluar en base al primer archivo (todos deberían compartir los mismos municipios)
-    df = pd.read_csv(csv_files[0])
-    
-    if "municipio" not in df.columns:
-        return AssetCheckResult(passed=False, metadata={"Error": MetadataValue.md("Columna 'municipio' faltante.")})
-        
-    conteo_por_isla = {isla: set() for isla in ESPERADOS_ISLAS.keys()}
-    municipios_desconocidos = set()
-    
-    for muni in df["municipio"].dropna().unique():
-        isla = inferir_isla(muni)
-        if isla != "Desconocida":
-            conteo_por_isla[isla].add(muni)
-        else:
-            municipios_desconocidos.add(muni)
-            
     passed = True
-    report_md = "### Balance Geográfico de Cierre Geštalt\n\nNuestra regla de cierre exige una cantidad estricta de municipios en el total del dataset.\n\n"
-    report_md += "| Isla | Encontrados | Esperados | Estado |\n|---|---|---|---|\n"
+    report_md = "### Balance Geográfico de Cierre Gestalt\n\nNuestra regla de cierre exige una cantidad estricta de municipios en el dataset, segmentada por islas aplicables.\n\n"
     
-    for isla, expected in ESPERADOS_ISLAS.items():
-        found = len(conteo_por_isla[isla])
-        if found != expected:
-            passed = False
-            status = f"❌ Faltan/Sobran ({found - expected})"
-        else:
-            status = "✅ Exacto"
-            
-        report_md += f"| **{isla}** | {found} | {expected} | {status} |\n"
+    ISLAS_SC = {"Tenerife", "La Palma", "La Gomera", "El Hierro"}
+    
+    for file in csv_files:
+        fname = os.path.basename(file)
+        report_md += f"\n#### Dataset: `{fname}`\n"
+        df = pd.read_csv(file)
         
-    if municipios_desconocidos:
-        report_md += f"\n**⚠️ Principio de Inconsistencia:** Municipios atípicos: {', '.join(municipios_desconocidos)}"
-
+        if "municipio" not in df.columns:
+            passed = False
+            report_md += "🔴 **Error:** Columna 'municipio' faltante en este dataset.\n"
+            continue
+            
+        conteo_por_isla = {isla: set() for isla in ESPERADOS_ISLAS.keys()}
+        municipios_desconocidos = set()
+        
+        for muni in df["municipio"].dropna().unique():
+            isla = inferir_isla(muni)
+            if isla != "Desconocida":
+                conteo_por_isla[isla].add(muni)
+            else:
+                municipios_desconocidos.add(muni)
+                
+        # Si el dataset es exclusivamente de SC de Tenerife
+        is_sc_only = "-sc-" in fname.lower()
+        
+        report_md += "| Isla | Encontrados | Esperados | Estado |\n|---|---|---|---|\n"
+        
+        for isla, expected in ESPERADOS_ISLAS.items():
+            if is_sc_only and isla not in ISLAS_SC:
+                continue # Ignoramos las islas de Las Palmas
+                
+            found = len(conteo_por_isla[isla])
+            if found != expected:
+                passed = False
+                status = f"❌ Faltan/Sobran ({found - expected})"
+            else:
+                status = "✅ Exacto"
+                
+            report_md += f"| **{isla}** | {found} | {expected} | {status} |\n"
+            
+        if municipios_desconocidos:
+            report_md += f"\n**⚠️ Principio de Inconsistencia:** Municipios atípicos: {', '.join(municipios_desconocidos)}\n"
+            
     return AssetCheckResult(
         passed=passed,
         metadata={"Balance_Islas": MetadataValue.md(report_md)}
