@@ -30,3 +30,11 @@ mapa_generico:
   filtro_actividad: null                        # ej: "Servicios", "Construcción" (solo actividad)
   filtro_ocupacion: null                        # ej: "Ocupaciones elementales" (solo ocupacion)
   filtro_sexo: null                             # ej: "Hombres", "Mujeres" (actividad u ocupacion)
+
+brecha_salarial:
+  dataset_ocu: "ocupacion-sc-3.csv"
+  dataset_dist: "distribucion-renta-ingresos.csv"
+  top_n: 20
+  ano_ini: 2021
+  ano_fin: 2023
+  umbral: 0.02

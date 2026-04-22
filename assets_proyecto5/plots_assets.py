@@ -354,3 +354,93 @@ def plot_mapa_generico(context: AssetExecutionContext) -> None:
     plt.close(fig)
     
     context.add_output_metadata({"plot": MetadataValue.md(f"![Mapa Geoespacial]({out_path})")})
+
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_brecha_salarial(context: AssetExecutionContext) -> None:
+    cfg = get_plot_config()["brecha_salarial"]
+    
+    TOP_N     = cfg.get("top_n", 20)
+    AÑO_INI   = cfg.get("ano_ini", 2021)
+    AÑO_FIN   = cfg.get("ano_fin", 2023)
+    UMBRAL    = cfg.get("umbral", 0.02)
+    
+    ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
+
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"]
+        .sum()
+        .pivot(index=["municipio", "año"], columns="sexo", values="num_casos")
+        .reset_index()
+    )
+    ocu_hm.columns.name = None
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+
+    sal = (
+        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"]
+        .median()
+        .rename(columns={"OBS_VALUE": "pct_salarios"})
+    )
+
+    merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+
+    ini = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(columns={"indice_brecha": "brecha_ini"})
+    fin = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(columns={"indice_brecha": "brecha_fin"})
+    
+    slope = ini.merge(fin, on="municipio")
+    slope["delta"] = slope["brecha_fin"] - slope["brecha_ini"]
+    slope["direccion"] = slope["delta"].apply(
+        lambda d: "Brecha aumenta" if d > UMBRAL else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante")
+    )
+
+    slope["brecha_media"] = (slope["brecha_ini"] + slope["brecha_fin"]) / 2
+    top = slope.nlargest(TOP_N, "brecha_media")
+
+    long = pd.concat([
+        top.assign(año=AÑO_INI, brecha=top["brecha_ini"]),
+        top.assign(año=AÑO_FIN, brecha=top["brecha_fin"]),
+    ])
+
+    mediana_global = long["brecha"].median()
+    COLORES = {
+        "Brecha aumenta":       "#C0392B",
+        "Brecha disminuye":     "#2B6CB0",
+        "Sin cambio relevante": "#AAAAAA",
+    }
+
+    p = (
+        ggplot(long, aes(x="factor(año)", y="brecha", group="municipio", color="direccion"))
+        + geom_hline(yintercept=mediana_global, linetype="dashed", color="#888888", size=0.5, alpha=0.7)
+        + geom_line(size=0.9, alpha=0.8)
+        + geom_point(size=2.5, stroke=0.3)
+        + geom_text(
+            data=long[long["año"] == AÑO_FIN],
+            mapping=aes(label="municipio"),
+            ha="left", size=7, nudge_x=0.05, color="#333333",
+        )
+        + scale_color_manual(values=COLORES, name=None)
+        + scale_x_discrete(expand=(0, 0.4))
+        + labs(
+            title="Evolución de la brecha salarial de género por municipio",
+            subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top {TOP_N} municipios · {AÑO_INI}→{AÑO_FIN}",
+            x=None, y="Índice de brecha salarial ponderado",
+            caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(11, 9),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=9, color="#555555"),
+            panel_grid=element_blank(),
+            axis_text_x=element_text(size=11, face="bold"),
+            axis_text_y=element_text(size=8, color="#888888"),
+            legend_position="bottom",
+        )
+    )
+
+    out_path = os.path.join(get_plot_dir(), "brecha_salarial_slope.png")
+    p.save(out_path, width=11, height=9, dpi=150, verbose=False)
+    context.add_output_metadata({"plot": MetadataValue.md(f"![Brecha Salarial Slope]({out_path})")})
