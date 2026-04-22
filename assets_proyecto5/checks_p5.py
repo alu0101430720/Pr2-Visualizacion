@@ -74,16 +74,24 @@ def check_ausencia_nulos(context, preprocesar_datos_p5: str):
     csv_files = glob.glob(os.path.join(preprocesar_datos_p5, "*.csv"))
     
     total_nulos = 0
-    report_md = "### Reporte de Nulos Gestalt\n\n| Dataset | Total Nulos |\n|---------|-------------|\n"
+    report_md = "### Reporte de Nulos Gestalt\n\n| Dataset | Total Nulos | Columnas Afectadas |\n|---------|-------------|--------------------|\n"
     
     for file in csv_files:
         df = pd.read_csv(file)
         n_nulos = df.isna().sum().sum()
         total_nulos += n_nulos
         
-        # Agrupación visual por dataset
-        status = "🔴 Alerta" if n_nulos > 0 else "🟢 Limpio"
-        report_md += f"| `{os.path.basename(file)}` | {n_nulos} ({status}) |\n"
+        # Identificar las columnas exactas donde residen los nulos para favorecer la focalización Gestalt
+        if n_nulos > 0:
+            status = "🔴 Alerta"
+            cols_con_nulos = df.columns[df.isna().any()].tolist()
+            # Formatear como "columna (cantidad)", ej: "num_casos (5)"
+            detalles_nulos = ", ".join([f"`{c}` ({df[c].isna().sum()})" for c in cols_con_nulos])
+        else:
+            status = "🟢 Limpio"
+            detalles_nulos = "-"
+            
+        report_md += f"| `{os.path.basename(file)}` | {n_nulos} ({status}) | {detalles_nulos} |\n"
         
     return AssetCheckResult(
         passed=bool(total_nulos == 0),
