@@ -405,7 +405,6 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         top.assign(año=AÑO_FIN, brecha=top["brecha_fin"]),
     ])
     
-    # Garantizar orden creciente izquierda-derecha forzando categorías ordenadas
     long["año_cat"] = pd.Categorical(long["año"], categories=[AÑO_INI, AÑO_FIN], ordered=True)
 
     mediana_global = long["brecha"].median()
@@ -420,13 +419,9 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         + geom_hline(yintercept=mediana_global, linetype="dashed", color="#888888", size=0.5, alpha=0.7)
         + geom_line(size=0.9, alpha=0.8)
         + geom_point(size=2.5, stroke=0.3)
-        + geom_text(
-            data=long[long["año"] == AÑO_FIN],
-            mapping=aes(label="municipio"),
-            ha="left", size=7, nudge_x=0.05, color="#333333",
-        )
+        # ── geom_text eliminado ──────────────────────────────────────────────
         + scale_color_manual(values=COLORES, name=None)
-        + scale_x_discrete(expand=(0, 0.4))
+        + scale_x_discrete(expand=(0, 0.1))  # reducido: ya no hay espacio para etiquetas
         + labs(
             title="Evolución de la brecha salarial de género por municipio",
             subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top {TOP_N} municipios · {AÑO_INI}→{AÑO_FIN}",
@@ -448,7 +443,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     out_path = os.path.join(get_plot_dir(), "brecha_salarial_slope.png")
     p.save(out_path, width=11, height=9, dpi=150, verbose=False)
     context.add_output_metadata({"plot": MetadataValue.md(f"![Brecha Salarial Slope]({out_path})")})
-
+    
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["brecha_salarial"]
