@@ -26,7 +26,11 @@ def get_plot_dir():
     return plot_dir
 
 def fmt_k(l):
-    return [f"{int(v/1000)}k" if pd.notna(v) else "" for v in l]
+    def format_num(v):
+        if pd.isna(v): return ""
+        if v >= 1000: return f"{v/1000:g}k"
+        return f"{v:g}"
+    return [format_num(v) for v in l]
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
@@ -235,7 +239,11 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
         context.log.warning(f"GeoJSON not found: {geojson_name}")
         return
         
-    gdf = gdf.merge(df_fil, left_on="geocode", right_on="TERRITORIO_CODE", how="left")
+    # Arreglo de cruce para sortear desajustes de prefijos de año (ej: 2024 vs 2023 en geocode)
+    gdf["sec_code"] = gdf["geocode"].apply(lambda x: "_".join(x.split("_")[1:]) if pd.notna(x) else x)
+    df_fil["sec_code"] = df_fil["TERRITORIO_CODE"].apply(lambda x: "_".join(x.split("_")[1:]) if pd.notna(x) else x)
+    
+    gdf = gdf.merge(df_fil, on="sec_code", how="left")
 
     fig, ax = plt.subplots(figsize=(14, 10))
 
@@ -313,7 +321,10 @@ def plot_mapa_generico(context: AssetExecutionContext) -> None:
         context.log.warning(f"No se detectó un GeoJSON ({geojson_name}). Asegurese de que reside en data-P5/cartografia-secciones/")
         return
         
-    gdf = gdf.merge(df_datos, left_on="geocode", right_on=col_geo, how="left")
+    gdf["sec_code"] = gdf["geocode"].apply(lambda x: "_".join(str(x).split("_")[1:]) if pd.notna(x) else x)
+    df_datos["sec_code"] = df_datos[col_geo].apply(lambda x: "_".join(str(x).split("_")[1:]) if pd.notna(x) else x)
+    
+    gdf = gdf.merge(df_datos, on="sec_code", how="left")
 
     fig, ax = plt.subplots(figsize=(14, 10))
     # Para geopandas plots muy finos
