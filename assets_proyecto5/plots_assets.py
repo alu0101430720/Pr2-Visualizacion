@@ -4,6 +4,7 @@ import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+from matplotlib.cm import ScalarMappable
 from plotnine import *
 from dagster import asset, AssetExecutionContext, MetadataValue
 from assets import preprocesar_datos_p5
@@ -403,6 +404,9 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         top.assign(año=AÑO_INI, brecha=top["brecha_ini"]),
         top.assign(año=AÑO_FIN, brecha=top["brecha_fin"]),
     ])
+    
+    # Garantizar orden creciente izquierda-derecha forzando categorías ordenadas
+    long["año_cat"] = pd.Categorical(long["año"], categories=[AÑO_INI, AÑO_FIN], ordered=True)
 
     mediana_global = long["brecha"].median()
     COLORES = {
@@ -412,7 +416,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     }
 
     p = (
-        ggplot(long, aes(x="factor(año)", y="brecha", group="municipio", color="direccion"))
+        ggplot(long, aes(x="año_cat", y="brecha", group="municipio", color="direccion"))
         + geom_hline(yintercept=mediana_global, linetype="dashed", color="#888888", size=0.5, alpha=0.7)
         + geom_line(size=0.9, alpha=0.8)
         + geom_point(size=2.5, stroke=0.3)
@@ -444,3 +448,104 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     out_path = os.path.join(get_plot_dir(), "brecha_salarial_slope.png")
     p.save(out_path, width=11, height=9, dpi=150, verbose=False)
     context.add_output_metadata({"plot": MetadataValue.md(f"![Brecha Salarial Slope]({out_path})")})
+
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
+    cfg = get_plot_config()["brecha_salarial"]
+    
+    AÑO_INI = cfg.get("ano_ini", 2021)
+    AÑO_FIN = cfg.get("ano_fin", 2023)
+    TOP_N_LABEL = cfg.get("top_n_label", 5)
+    
+    ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
+
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"].sum()
+        .pivot(index=["municipio", "año"], columns="sexo", values="num_casos")
+        .reset_index()
+    )
+    ocu_hm.columns.name = None
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+
+    sal = (
+        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
+        .rename(columns={"OBS_VALUE": "pct_salarios"})
+    )
+
+    merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+
+    def cargar_municipios(año):
+        geojson_name = f"secciones_{año}0101_tenerife.json"
+        try:
+            gdf = gpd.read_file(get_geojson_path(geojson_name)).set_crs("EPSG:4326", allow_override=True)
+            gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
+            gdf_mun = gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
+            return gdf_mun
+        except Exception:
+            return None
+
+    lim = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
+    vmin, vmax = -lim, lim
+
+    fig, axes = plt.subplots(1, 2, figsize=(18, 9))
+
+    for ax, año in zip(axes, [AÑO_INI, AÑO_FIN]):
+        gdf_mun = cargar_municipios(año)
+        if gdf_mun is None:
+            ax.set_title(f"{año} - Sin Datos Espaciales")
+            ax.axis("off")
+            continue
+            
+        datos_año = merged[merged["año"] == año][["municipio", "indice_brecha"]]
+        gdf_plot = gdf_mun.merge(datos_año, on="municipio", how="left")
+
+        gdf_plot.plot(
+            column="indice_brecha",
+            cmap="RdBu_r", vmin=vmin, vmax=vmax,
+            linewidth=0.15, edgecolor="white",
+            missing_kwds={"color": "#dddddd", "label": "Sin datos"},
+            legend=False, ax=ax,
+        )
+
+        ax.set_title(str(año), fontsize=14, fontweight="bold", pad=8)
+        ax.axis("off")
+
+        top_mun = (
+            datos_año.assign(abs_brecha=datos_año["indice_brecha"].abs())
+            .nlargest(TOP_N_LABEL, "abs_brecha")["municipio"]
+            .tolist()
+        )
+        centroides = gdf_plot[gdf_plot["municipio"].isin(top_mun)].copy()
+        try:
+            centroides["cx"] = centroides.geometry.centroid.x
+            centroides["cy"] = centroides.geometry.centroid.y
+
+            for _, row in centroides.iterrows():
+                ax.annotate(
+                    row["municipio"],
+                    xy=(row["cx"], row["cy"]),
+                    fontsize=7, ha="center", color="#111111", fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.6, ec="none"),
+                )
+        except Exception:
+            pass
+
+    norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
+    sm   = ScalarMappable(cmap="RdBu_r", norm=norm)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=axes, orientation="vertical", shrink=0.6, pad=0.02)
+    cbar.set_label("Índice de brecha salarial\n(+ = favorable a hombres  /  − = favorable a mujeres)", fontsize=9)
+
+    fig.suptitle("Brecha salarial de género por municipio — Tenerife", fontsize=15, fontweight="bold", y=1.01)
+    fig.text(0.5, -0.01, "Índice = ratio H/(H+M) × % sueldos sobre renta · Fuente: ISTAC", ha="center", fontsize=8, color="#666666")
+
+    fig.tight_layout()
+    out_path = os.path.join(get_plot_dir(), "mapa_brecha_salarial.png")
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    
+    context.add_output_metadata({"plot": MetadataValue.md(f"![Mapa Brecha Salarial]({out_path})")})
