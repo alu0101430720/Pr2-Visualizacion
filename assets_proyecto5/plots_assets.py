@@ -189,7 +189,7 @@ def plot_renta_cajas(context: AssetExecutionContext) -> None:
         + scale_y_continuous(labels=fmt_k)
         + coord_flip()
         + labs(
-            title=f"{medida.replace('_', ' ').title()} — Top 15 municipios Tenerife",
+            title=f"{medida.replace('_', ' ').title()} — Top 15 municipios de S/C de Tenerife",
             subtitle="Distribución por sección censal · puntos = valores anuales individuales",
             x=None, y="€ / año",
             caption="Fuente: ISTAC",
