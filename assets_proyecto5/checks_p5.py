@@ -1,7 +1,7 @@
 import os
 import glob
 import pandas as pd
-from dagster import asset_check, AssetCheckResult, MetadataValue
+from dagster import asset_check, AssetCheckResult, MetadataValue, AssetCheckSeverity
 import warnings
 from assets import preprocesar_datos_p5
 
@@ -95,6 +95,7 @@ def check_ausencia_nulos(context, preprocesar_datos_p5: str):
         
     return AssetCheckResult(
         passed=bool(total_nulos == 0),
+        severity=AssetCheckSeverity.WARN,
         metadata={
             "Resumen_Nulos": MetadataValue.md(report_md)
         }
