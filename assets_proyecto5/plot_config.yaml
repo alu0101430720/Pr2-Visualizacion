@@ -37,5 +37,6 @@ brecha_salarial:
   top_n: 20
   ano_ini: 2021
   ano_fin: 2023
+  ano_mapa: 2023
   umbral: 0.02
   top_n_label: 5

@@ -488,18 +488,19 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         except Exception:
             return None
 
+    AÑO_MAPA = cfg.get("ano_mapa", 2023)
+    
     lim = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
     vmin, vmax = -lim, lim
 
-    fig, axes = plt.subplots(1, 2, figsize=(18, 9))
+    fig, ax = plt.subplots(figsize=(12, 10))
+    año = AÑO_MAPA
 
-    for ax, año in zip(axes, [AÑO_INI, AÑO_FIN]):
-        gdf_mun = cargar_municipios(año)
-        if gdf_mun is None:
-            ax.set_title(f"{año} - Sin Datos Espaciales")
-            ax.axis("off")
-            continue
-            
+    gdf_mun = cargar_municipios(año)
+    if gdf_mun is None:
+        ax.set_title(f"{año} - Sin Datos Espaciales")
+        ax.axis("off")
+    else:
         datos_año = merged[merged["año"] == año][["municipio", "indice_brecha"]]
         gdf_plot = gdf_mun.merge(datos_año, on="municipio", how="left")
 
@@ -511,9 +512,6 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
             legend=False, ax=ax,
         )
 
-        ax.set_title(str(año), fontsize=14, fontweight="bold", pad=8)
-        ax.axis("off")
-
         top_mun = (
             datos_año.assign(abs_brecha=datos_año["indice_brecha"].abs())
             .nlargest(TOP_N_LABEL, "abs_brecha")["municipio"]
@@ -523,25 +521,26 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         try:
             centroides["cx"] = centroides.geometry.centroid.x
             centroides["cy"] = centroides.geometry.centroid.y
-
             for _, row in centroides.iterrows():
                 ax.annotate(
                     row["municipio"],
                     xy=(row["cx"], row["cy"]),
-                    fontsize=7, ha="center", color="#111111", fontweight="bold",
+                    fontsize=8, ha="center", color="#111111", fontweight="bold",
                     bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.6, ec="none"),
                 )
         except Exception:
             pass
 
+        ax.axis("off")
+
     norm = mcolors.TwoSlopeNorm(vmin=vmin, vcenter=0, vmax=vmax)
     sm   = ScalarMappable(cmap="RdBu_r", norm=norm)
     sm.set_array([])
-    cbar = fig.colorbar(sm, ax=axes, orientation="vertical", shrink=0.6, pad=0.02)
-    cbar.set_label("Índice de brecha salarial\n(+ = favorable a hombres  /  − = favorable a mujeres)", fontsize=9)
+    cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
+    cbar.set_label("Índice de brecha salarial\n(+ = favorable a hombres  /  − = favorable a mujeres)", fontsize=10)
 
-    fig.suptitle("Brecha salarial de género por municipio — Tenerife", fontsize=15, fontweight="bold", y=1.01)
-    fig.text(0.5, -0.01, "Índice = ratio H/(H+M) × % sueldos sobre renta · Fuente: ISTAC", ha="center", fontsize=8, color="#666666")
+    fig.suptitle(f"Brecha salarial de género por municipio — Tenerife {AÑO_MAPA}", fontsize=15, fontweight="bold", y=0.95)
+    fig.text(0.5, 0.08, "Índice = ratio H/(H+M) × % sueldos sobre renta · Fuente: ISTAC", ha="center", fontsize=9, color="#666666")
 
     fig.tight_layout()
     out_path = os.path.join(get_plot_dir(), "mapa_brecha_salarial.png")
