@@ -5,7 +5,7 @@ from dagster import asset_check, AssetCheckResult, MetadataValue
 import warnings
 from assets import preprocesar_datos_p5
 
-# Mapeo de Municipios de Canarias por Isla
+# Mapeo estricto para agrupar e inferir islas. Aquí tenemos en cuenta variantes ortográficas halladas en INE CSVs.
 MUNICIPIOS_POR_ISLA = {
     "Tenerife": {
         "Adeje", "Arafo", "Arico", "Arona", "Buenavista del Norte", "Candelaria",
@@ -42,6 +42,17 @@ MUNICIPIOS_POR_ISLA = {
     }
 }
 
+# Estructura del nombre canónico estándar de los 88 municipios (para evaluar desviaciones o ausencias)
+CANONICOS_ISLA = {
+    "Tenerife": {"Adeje", "Arafo", "Arico", "Arona", "Buenavista del Norte", "Candelaria", "Fasnia", "Garachico", "Granadilla de Abona", "La Guancha", "Guía de Isora", "Güímar", "Icod de los Vinos", "La Matanza de Acentejo", "La Orotava", "Puerto de la Cruz", "Los Realejos", "El Rosario", "San Cristóbal de La Laguna", "San Juan de la Rambla", "San Miguel de Abona", "Santa Cruz de Tenerife", "Santa Úrsula", "Santiago del Teide", "El Sauzal", "Los Silos", "Tacoronte", "El Tanque", "Tegueste", "La Victoria de Acentejo", "Vilaflor de Chasna"},
+    "Gran Canaria": {"Agaete", "Agüimes", "Artenara", "Arucas", "Firgas", "Gáldar", "Ingenio", "Mogán", "Moya", "Las Palmas de Gran Canaria", "San Bartolomé de Tirajana", "La Aldea de San Nicolás", "Santa Brígida", "Santa Lucía de Tirajana", "Santa María de Guía de Gran Canaria", "Tejeda", "Telde", "Teror", "Valleseco", "Valsequillo de Gran Canaria", "Vega de San Mateo"},
+    "La Palma": {"Barlovento", "Breña Alta", "Breña Baja", "Fuencaliente de la Palma", "Garafía", "Los Llanos de Aridane", "El Paso", "Puntagorda", "Puntallana", "San Andrés y Sauces", "Santa Cruz de la Palma", "Tazacorte", "Tijarafe", "Villa de Mazo"},
+    "Lanzarote": {"Arrecife", "Haría", "San Bartolomé", "Teguise", "Tías", "Tinajo", "Yaiza"},
+    "Fuerteventura": {"Antigua", "Betancuria", "La Oliva", "Pájara", "Puerto del Rosario", "Tuineje"},
+    "La Gomera": {"Agulo", "Alajeró", "Hermigua", "San Sebastián de la Gomera", "Valle Gran Rey", "Vallehermoso"},
+    "El Hierro": {"La Frontera", "El Pinar de El Hierro", "Valverde"}
+}
+
 ESPERADOS_ISLAS = {
     "Tenerife": 31,
     "Gran Canaria": 21,
@@ -53,15 +64,9 @@ ESPERADOS_ISLAS = {
 }
 
 def inferir_isla(municipio):
-    # Formateo básico para evitar discordancias simples como comas
-    municipio_limpio = municipio.replace(",", "").strip()
     for isla, munis in MUNICIPIOS_POR_ISLA.items():
-        if municipio_limpio in munis:
+        if municipio in munis:
             return isla
-        # Búsqueda suave si no encaja perfecto
-        for m in munis:
-            if m.lower() in municipio_limpio.lower() or municipio_limpio.lower() in m.lower():
-                return isla
     return "Desconocida"
 
 @asset_check(asset=preprocesar_datos_p5, description="Comprueba que no existen valores nulos en el dataset.")
@@ -94,7 +99,7 @@ def check_conteo_municipios(context, preprocesar_datos_p5: str):
         return AssetCheckResult(passed=False, metadata={"Error": MetadataValue.md("No se encontraron CSVs.")})
     
     passed = True
-    report_md = "### Balance Geográfico de Cierre Gestalt\n\nNuestra regla de cierre exige una cantidad estricta de municipios en el dataset, segmentada por islas aplicables.\n\n"
+    report_md = "### Balance Geográfico de Cierre Gestalt\n\nNuestra regla de cierre exige una cantidad estricta de municipios en el dataset. Incluye diagnóstico de hallazgos para facilitar la evaluación analítica operativa.\n\n"
     
     ISLAS_SC = {"Tenerife", "La Palma", "La Gomera", "El Hierro"}
     
@@ -121,23 +126,47 @@ def check_conteo_municipios(context, preprocesar_datos_p5: str):
         # Si el dataset es exclusivamente de SC de Tenerife
         is_sc_only = "-sc-" in fname.lower()
         
-        report_md += "| Isla | Encontrados | Esperados | Estado |\n|---|---|---|---|\n"
+        report_md += "| Isla | Encontrados | Esperados | Estado | Observaciones Clínicas |\n|---|---|---|---|---|\n"
         
         for isla, expected in ESPERADOS_ISLAS.items():
             if is_sc_only and isla not in ISLAS_SC:
                 continue
                 
             found = len(conteo_por_isla[isla])
+            detalles = ""
+            
             if found != expected:
                 passed = False
                 status = f"❌ Faltan/Sobran ({found - expected})"
+                
+                encontrados_isla = conteo_por_isla[isla]
+                oficiales = CANONICOS_ISLA[isla]
+                
+                # Normalizamos asimilando todo a minúsculas
+                encontrados_lower = {m.lower() for m in encontrados_isla}
+                oficiales_lower = {m.lower() for m in oficiales}
+                
+                # Municipios exigidos que NO están detectados:
+                faltantes = [m for m in oficiales if m.lower() not in encontrados_lower]
+                if faltantes:
+                    detalles += f"**Faltan:** {', '.join(faltantes)}. "
+                
+                # Municipios encontrados NO previstos en canónicos:
+                sobrantes = [m for m in encontrados_isla if m.lower() not in oficiales_lower]
+                if sobrantes:
+                    detalles += f"**Sobra (quizás duplicados/alias):** {', '.join(sobrantes)}"
+                
+                if not detalles:
+                    detalles = "Descuadre numérico, revisa formato."
+                    
             else:
                 status = "✅ Exacto"
+                detalles = "-"
                 
-            report_md += f"| **{isla}** | {found} | {expected} | {status} |\n"
+            report_md += f"| **{isla}** | {found} | {expected} | {status} | {detalles} |\n"
             
         if municipios_desconocidos:
-            report_md += f"\n**⚠️ Principio de Inconsistencia:** Municipios atípicos: {', '.join(municipios_desconocidos)}\n"
+            report_md += f"\n**⚠️ Principio de Inconsistencia:** Municipios atípicos incategorizables: {', '.join(municipios_desconocidos)}\n"
             
     return AssetCheckResult(
         passed=passed,
