@@ -1,0 +1,32 @@
+# Configuración dinámica para los Assets Gráficos
+# Aquí puedes editar los años, las paletas de color y los componentes a mapear libremente.
+
+distribucion_lineas:
+  dataset: "distribucion-renta-ingresos.csv"
+  x_breaks: [2021, 2022, 2023]
+
+mapa_distribucion:
+  dataset: "distribucion-renta-ingresos.csv"
+  ano: 2023
+  componente: "SUELDOS_SALARIOS"      # Opciones: OTRAS_PRESTACIONES, OTROS_INGRESOS, PENSIONES, PRESTACIONES_DESEMPLEO, SUELDOS_SALARIOS
+
+actividad_barras:
+  dataset: "actividad-sc-3.csv"
+  
+ocupacion_divergente:
+  dataset: "ocupacion-sc-3.csv"
+
+renta_cajas:
+  dataset: "rentamedia-sc-3.csv"
+  medida: "RENTA_BRUTA_MEDIA_HOGAR"   # Opciones: RENTA_BRUTA_MEDIA_HOGAR, RENTA_BRUTA_MEDIA_PERSONA, RENTA_NETA_MEDIA_HOGAR, RENTA_NETA_MEDIA_PERSONA, RENTA_NETA_UNIDAD_CONSUMO_MEDIA, RENTA_NETA_UNIDAD_CONSUMO_MEDIANA
+
+mapa_generico:
+  dataset: "rentamedia-sc-3.csv"      # Opciones: "rentamedia-sc-3.csv", "actividad-sc-3.csv", "ocupacion-sc-3.csv"
+  ano: 2023
+  cmap: "YlOrRd"                      # Cualquier paleta válida de matplotlib
+  
+  # Filtros opcionales (deja en null si no aplica a tu dataset)
+  filtro_medida: "RENTA_BRUTA_MEDIA_HOGAR"       # (solo util para rentamedia)
+  filtro_actividad: null                        # ej: "Servicios", "Construcción" (solo actividad)
+  filtro_ocupacion: null                        # ej: "Ocupaciones elementales" (solo ocupacion)
+  filtro_sexo: null                             # ej: "Hombres", "Mujeres" (actividad u ocupacion)
