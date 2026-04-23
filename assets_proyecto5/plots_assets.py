@@ -33,6 +33,22 @@ def fmt_k(l):
         return f"{v:g}"
     return [format_num(v) for v in l]
 
+def cargar_gdf_municipios(año: int, logger=None) -> gpd.GeoDataFrame | None:
+    """
+    Carga el GeoJSON del año indicado y disuelve secciones → municipios.
+    Extrae el nombre del municipio desde la columna 'etiqueta'.
+    Devuelve None si el fichero no existe.
+    """
+    geojson_name = f"secciones_{año}0101_tenerife.json"
+    path = get_geojson_path(geojson_name)
+    if not os.path.exists(path):
+        if logger:
+            logger.warning(f"GeoJSON no encontrado: {path}")
+        return None
+    gdf = gpd.read_file(path).set_crs("EPSG:4326", allow_override=True)
+    gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
+    return gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
+
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["distribucion_lineas"]
@@ -232,19 +248,18 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
     }
 
     df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    df_fil = df[(df["año"] == año) & (df["MEDIDAS_CODE"] == componente)][["TERRITORIO_CODE", "OBS_VALUE"]]
+    df_fil = (
+        df[(df["año"] == año) & (df["MEDIDAS_CODE"] == componente)]
+        .groupby("municipio", as_index=False)["OBS_VALUE"]
+        .median()
+    )
 
-    try:
-        gdf = gpd.read_file(get_geojson_path(geojson_name)).set_crs("EPSG:4326", allow_override=True)
-    except Exception as e:
-        context.log.warning(f"GeoJSON not found: {geojson_name}")
+    gdf_mun = cargar_gdf_municipios(año, context.log)
+    if gdf_mun is None:
+        context.log.warning(f"GeoJSON no disponible para {año}. Asset omitido.")
         return
-        
-    # Arreglo de cruce para sortear desajustes de prefijos de año (ej: 2024 vs 2023 en geocode)
-    gdf["sec_code"] = gdf["geocode"].apply(lambda x: "_".join(x.split("_")[1:]) if pd.notna(x) else x)
-    df_fil["sec_code"] = df_fil["TERRITORIO_CODE"].apply(lambda x: "_".join(x.split("_")[1:]) if pd.notna(x) else x)
-    
-    gdf = gdf.merge(df_fil, on="sec_code", how="left")
+
+    gdf = gdf_mun.merge(df_fil, on="municipio", how="left")
 
     fig, ax = plt.subplots(figsize=(14, 10))
 
@@ -286,46 +301,51 @@ def plot_mapa_generico(context: AssetExecutionContext) -> None:
     df = pd.read_csv(get_processed_path(dataset_name))
     cols = df.columns.tolist()
 
-    if "MEDIDAS_CODE" in cols and "OBS_VALUE" in cols and "TERRITORIO_CODE" in cols:
-        col_año, col_geo, col_val = "año", "TERRITORIO_CODE", "OBS_VALUE"
+    if "MEDIDAS_CODE" in cols and "OBS_VALUE" in cols:
+        col_año = "año"
+        col_val = "OBS_VALUE"
         mask = df[col_año] == año
         if filtro_medida:
             mask &= df["MEDIDAS_CODE"] == filtro_medida
         label_val = filtro_medida or "OBS_VALUE"
-        df_datos = df[mask][[col_geo, col_val]].copy()
 
     elif "Actividad económica" in cols:
-        col_año, col_geo, col_val = "Periodo", "geocode", "num_casos"
+        col_año = "Periodo"
+        col_val = "num_casos"
         mask = df[col_año] == año
         if filtro_actividad:
             mask &= df["Actividad económica"] == filtro_actividad
         if filtro_sexo:
             mask &= df["Sexo"] == filtro_sexo
         label_val = f"{filtro_actividad or 'Todas'} · {filtro_sexo or 'Ambos sexos'}"
-        df_datos = df[mask].groupby(col_geo)[col_val].sum().reset_index()
 
     elif "ocupacion" in cols:
-        col_año, col_geo, col_val = "año", "geocode", "num_casos"
+        col_año = "año"
+        col_val = "num_casos"
         mask = df[col_año] == año
         if filtro_ocupacion:
             mask &= df["ocupacion"] == filtro_ocupacion
         if filtro_sexo:
             mask &= df["sexo"] == filtro_sexo
         label_val = f"{filtro_ocupacion or 'Todas'} · {filtro_sexo or 'Ambos sexos'}"
-        df_datos = df[mask].groupby(col_geo)[col_val].sum().reset_index()
-    else:
-        raise ValueError(f"Estructura de dataset no reconocida para el mapa genérico.")
 
-    try:
-        gdf = gpd.read_file(get_geojson_path(geojson_name)).set_crs("EPSG:4326", allow_override=True)
-    except Exception as e:
-        context.log.warning(f"No se detectó un GeoJSON ({geojson_name}). Asegurese de que reside en data-P5/cartografia-secciones/")
+    else:
+        raise ValueError("Estructura de dataset no reconocida para el mapa genérico.")
+
+    # Agregar a municipio (suma para conteos, mediana para porcentajes/rentas)
+    agg_fn = "sum" if col_val == "num_casos" else "median"
+    df_datos = (
+        df[mask]
+        .groupby("municipio", as_index=False)[col_val]
+        .agg(agg_fn)
+    )
+
+    gdf_mun = cargar_gdf_municipios(año, context.log)
+    if gdf_mun is None:
+        context.log.warning(f"GeoJSON no disponible para {año}. Asset omitido.")
         return
-        
-    gdf["sec_code"] = gdf["geocode"].apply(lambda x: "_".join(str(x).split("_")[1:]) if pd.notna(x) else x)
-    df_datos["sec_code"] = df_datos[col_geo].apply(lambda x: "_".join(str(x).split("_")[1:]) if pd.notna(x) else x)
-    
-    gdf = gdf.merge(df_datos, on="sec_code", how="left")
+
+    gdf = gdf_mun.merge(df_datos, on="municipio", how="left")
 
     fig, ax = plt.subplots(figsize=(14, 10))
     # Para geopandas plots muy finos
@@ -506,25 +526,6 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
             missing_kwds={"color": "#dddddd", "label": "Sin datos"},
             legend=False, ax=ax,
         )
-
-        top_mun = (
-            datos_año.assign(abs_brecha=datos_año["indice_brecha"].abs())
-            .nlargest(TOP_N_LABEL, "abs_brecha")["municipio"]
-            .tolist()
-        )
-        centroides = gdf_plot[gdf_plot["municipio"].isin(top_mun)].copy()
-        try:
-            centroides["cx"] = centroides.geometry.centroid.x
-            centroides["cy"] = centroides.geometry.centroid.y
-            for _, row in centroides.iterrows():
-                ax.annotate(
-                    row["municipio"],
-                    xy=(row["cx"], row["cy"]),
-                    fontsize=8, ha="center", color="#111111", fontweight="bold",
-                    bbox=dict(boxstyle="round,pad=0.2", fc="white", alpha=0.6, ec="none"),
-                )
-        except Exception:
-            pass
 
         ax.axis("off")
 

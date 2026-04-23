@@ -379,62 +379,88 @@ def check_suma_componentes_distribucion(context, preprocesar_datos_p5: str):
 
 @asset_check(
     asset=preprocesar_datos_p5,
-    description="Verifica que los geocodes del CSV coinciden con los GeoJSON disponibles.",
+    description="Verifica cobertura del join CSV ↔ GeoJSON a nivel municipio.",
 )
 def check_cobertura_join_geojson(context, preprocesar_datos_p5: str):
     """
-    Gap detectado: ningún check existente valida si los geocodes de los CSV
-    realmente aparecen en los GeoJSON antes de hacer el merge en los mapas.
-    Una cobertura baja (<80%) produciría mapas con muchas secciones grises.
+    Los mapas agregan datos a nivel municipio y hacen el join por nombre.
+    Este check valida que los municipios presentes en cada CSV tienen
+    correspondencia en el GeoJSON tras la disolución sección→municipio.
+    Cobertura esperada ≥ 80%.
     """
     años = [2021, 2022, 2023]
-    datasets_con_geo = {
-        "rentamedia-sc-3.csv":            ("TERRITORIO_CODE", "año"),
-        "distribucion-renta-ingresos.csv": ("TERRITORIO_CODE", "año"),
+    # Columna municipio en cada dataset
+    datasets = {
+        "rentamedia-sc-3.csv":             "municipio",
+        "distribucion-renta-ingresos.csv": "municipio",
+        "actividad-sc-3.csv":              "municipio",
+        "ocupacion-sc-3.csv":              "municipio",
     }
-    passed = True
-    report_md = "### Cobertura geocode CSV ↔ GeoJSON\n\n| Dataset | Año | Geocodes CSV | Match GeoJSON | Cobertura |\n|---------|-----|-------------|---------------|----------|\n"
 
-    for fname, (col_geo, col_año) in datasets_con_geo.items():
+    passed = True
+    report_md = (
+        "### Cobertura join CSV ↔ GeoJSON (nivel municipio)\n\n"
+        "| Dataset | Año | Municipios CSV | Match GeoJSON | Cobertura |\n"
+        "|---------|-----|---------------|---------------|----------|\n"
+    )
+
+    for fname, col_mun in datasets.items():
         fpath = os.path.join(preprocesar_datos_p5, fname)
         if not os.path.exists(fpath):
             continue
         df = pd.read_csv(fpath)
-        if col_geo not in df.columns:
+        if col_mun not in df.columns:
+            report_md += f"| `{fname}` | — | — | — | ⚠️ sin col municipio |\n"
             continue
+
+        col_año = "año" if "año" in df.columns else "Periodo" if "Periodo" in df.columns else None
 
         for año in años:
             geojson_path = get_geojson_path(f"secciones_{año}0101_tenerife.json")
             if not os.path.exists(geojson_path):
                 continue
+
             try:
                 gdf = gpd.read_file(geojson_path)
-            except Exception:
+                # Reproducir exactamente la disolución que hacen los assets de mapa
+                gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
+                municipios_gdf = set(gdf["municipio"].dropna().unique())
+            except Exception as e:
+                report_md += f"| `{fname}` | {año} | — | — | ⚠️ error GeoJSON: {e} |\n"
                 continue
 
-            geo_codes_csv = set(
-                df[df[col_año] == año][col_geo]
-                .dropna()
-                .apply(lambda x: "_".join(str(x).split("_")[1:]))
-            )
-            geo_codes_gdf = set(
-                gdf["geocode"]
-                .dropna()
-                .apply(lambda x: "_".join(str(x).split("_")[1:]))
-            )
-            match = geo_codes_csv & geo_codes_gdf
-            cobertura = len(match) / len(geo_codes_csv) if geo_codes_csv else 0
-            icono = "🟢" if cobertura >= 0.8 else "🔴"
-            if cobertura < 0.8:
+            # Municipios presentes en el CSV para ese año
+            df_año = df[df[col_año] == año] if col_año else df
+            municipios_csv = set(df_año[col_mun].dropna().unique())
+
+            if not municipios_csv:
+                report_md += f"| `{fname}` | {año} | 0 | 0 | ⚠️ sin datos |\n"
+                continue
+
+            match     = municipios_csv & municipios_gdf
+            sin_match = municipios_csv - municipios_gdf
+            cobertura = len(match) / len(municipios_csv)
+            ok        = cobertura >= 0.8
+            icono     = "🟢" if ok else "🔴"
+            if not ok:
                 passed = False
-            report_md += f"| `{fname}` | {año} | {len(geo_codes_csv)} | {len(match)} | {icono} {cobertura:.0%} |\n"
+
+            report_md += (
+                f"| `{fname}` | {año} | {len(municipios_csv)} "
+                f"| {len(match)} | {icono} {cobertura:.0%} |\n"
+            )
+            if sin_match:
+                report_md += (
+                    f"|  |  | *Sin match:* | "
+                    f"`{'`, `'.join(sorted(sin_match)[:10])}`"
+                    f"{'…' if len(sin_match) > 10 else ''} | |\n"
+                )
 
     return AssetCheckResult(
         passed=passed,
         severity=AssetCheckSeverity.WARN,
-        metadata={"Cobertura_GeoJSON": MetadataValue.md(report_md)},
+        metadata={"Cobertura_Municipio": MetadataValue.md(report_md)},
     )
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CHECKS DE PLOTS — DATOS DE ENTRADA
