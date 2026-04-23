@@ -6,7 +6,7 @@ from dagster import asset, get_dagster_logger
 import config
 from git import pull_or_clone_repo
 
-@asset
+@asset(group_name="ingesta")
 def extraer_repositorio_github() -> str:
     """
     Asset que permite la carga/sincronización del repositorio desde GitHub.
@@ -23,7 +23,7 @@ def extraer_repositorio_github() -> str:
             
     return config.TARGET_DIR
 
-@asset(deps=[extraer_repositorio_github])
+@asset(deps=[extraer_repositorio_github], group_name="ingesta")
 def ingestar_datos_p5() -> str:
     """
     Asset para la ingesta de datos del proyecto que se encuentran en data-P5.
@@ -50,7 +50,7 @@ def ingestar_datos_p5() -> str:
 
     return target_data_dir
 
-@asset(deps=[ingestar_datos_p5])
+@asset(deps=[ingestar_datos_p5], group_name="preprocesado")
 def preprocesar_datos_p5() -> str:
     """
     Asset para preprocesar los datos CSV de data-P5.
