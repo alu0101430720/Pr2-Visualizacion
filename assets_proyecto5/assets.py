@@ -2,9 +2,15 @@ import os
 import shutil
 import glob
 import pandas as pd
-from dagster import asset, get_dagster_logger
+from dagster import asset, get_dagster_logger, MetadataValue, AssetExecutionContext
 import config
-from git import pull_or_clone_repo
+from git import (
+    pull_or_clone_repo,
+    configure_git_identity,
+    stage_plots,
+    commit_plots,
+    push_branch,
+)
 
 @asset(group_name="ingesta")
 def extraer_repositorio_github() -> str:
@@ -115,3 +121,74 @@ def preprocesar_datos_p5() -> str:
             logger.error(f"Error procesando el archivo {filename}: {str(e)}")
             
     return processed_dir
+
+@asset(
+    deps=[
+        "plot_distribucion_lineas",
+        "plot_actividad_barras",
+        "plot_ocupacion_divergente",
+        "plot_renta_cajas",
+        "plot_mapa_distribucion_renta",
+        "plot_mapa_generico",
+        "plot_brecha_salarial",
+        "plot_mapa_brecha_salarial",
+        "plot_renta_violin",
+    ],
+    group_name="publicacion",
+    description=(
+        "Commitea y hace push al repositorio GitHub de todos los PNG generados "
+        "por los assets de visualización. Solo crea commit si hay cambios reales "
+        "respecto al último commit (idempotente). "
+        "Requiere que Git esté configurado con credenciales válidas "
+        "(HTTPS token en la URL o clave SSH)."
+    ),
+)
+def commitear_plots_a_github(context: AssetExecutionContext) -> None:
+    logger = context.log
+ 
+    plots_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR, "plots")
+ 
+    if not os.path.isdir(plots_dir):
+        raise FileNotFoundError(
+            f"El directorio de plots no existe: {plots_dir}. "
+            "Asegúrate de que al menos un asset de visualización se ha materializado."
+        )
+ 
+    png_count = len(glob.glob(os.path.join(plots_dir, "*.png")))
+    logger.info(f"Directorio de plots: {plots_dir} ({png_count} PNG encontrados)")
+ 
+    # 1. Identidad Git (necesaria en entornos CI sin .gitconfig global)
+    configure_git_identity(config.TARGET_DIR, logger)
+ 
+    # 2. Stage de todos los PNG nuevos o modificados
+    staged = stage_plots(plots_dir, config.TARGET_DIR, logger)
+ 
+    # 3. Commit (omitido automáticamente si no hay cambios)
+    commit_hash = commit_plots(
+        staged=staged,
+        target_dir=config.TARGET_DIR,
+        logger=logger,
+        message=(
+            f"ci: actualizar {len(staged)} gráfico(s) generados por Dagster "
+            f"[{', '.join(os.path.basename(f) for f in staged)}]"
+        ),
+    )
+ 
+    # 4. Push
+    if commit_hash:
+        push_branch(config.GITHUB_BRANCH, config.TARGET_DIR, logger)
+ 
+    # 5. Metadata visible en la UI de Dagster
+    context.add_output_metadata({
+        "plots_staged":  MetadataValue.int(len(staged)),
+        "commit_hash":   MetadataValue.text(commit_hash or "sin cambios"),
+        "rama":          MetadataValue.text(config.GITHUB_BRANCH),
+        "repositorio":   MetadataValue.url(config.GITHUB_REPO_URL),
+        "ficheros":      MetadataValue.md(
+            "### Ficheros commiteados\n\n"
+            + (
+                "\n".join(f"- `{os.path.basename(f)}`" for f in staged)
+                if staged else "_Sin cambios respecto al último commit._"
+            )
+        ),
+    })
