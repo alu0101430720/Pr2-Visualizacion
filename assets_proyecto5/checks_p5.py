@@ -4,7 +4,7 @@ import time
 import pandas as pd
 import geopandas as gpd
 from dagster import asset_check, AssetCheckResult, MetadataValue, AssetCheckSeverity
-from assets import preprocesar_datos_p5
+from assets import preprocesar_datos_p5, commitear_plots_a_github
 from plots_assets import (
     plot_distribucion_lineas,
     plot_actividad_barras,
@@ -1103,7 +1103,7 @@ def check_datos_renta_violin(context):
 # ══════════════════════════════════════════════════════════════════════════════
 
 @asset_check(
-    asset=plot_brecha_salarial,
+    asset=commitear_plots_a_github,
     description="Verifica que todos los PNG generados existen, pesan > 50 KB y son recientes.",
 )
 def check_output_plots(context):
