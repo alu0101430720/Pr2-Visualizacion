@@ -287,12 +287,12 @@ def check_duplicados(context, preprocesar_datos_p5: str):
     for file in csv_files:
         df = pd.read_csv(file)
         n_dup = df.duplicated().sum()
-        passed = passed and (n_dup == 0)
+        passed = passed and bool(n_dup == 0)
         icono = "🟢" if n_dup == 0 else "🔴"
         report_md += f"| `{os.path.basename(file)}` | {icono} {n_dup} |\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Duplicados": MetadataValue.md(report_md)},
     )
@@ -334,7 +334,7 @@ def check_rangos_valores(context, preprocesar_datos_p5: str):
         report_md += f"| `{fname}` | {tipo} | {icono} {n_fuera} | {vmin:.1f} | {vmax:.1f} |\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Rangos": MetadataValue.md(report_md)},
     )
