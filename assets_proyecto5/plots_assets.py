@@ -275,7 +275,7 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
     )
 
     ax.set_title(f"{LABELS.get(componente, componente).replace(' (%)', '')} sobre renta total — Tenerife {año}", fontsize=14, fontweight="bold", pad=12)
-    ax.annotate("Por sección censal · Fuente: ISTAC", xy=(0.01, 0.98), xycoords="axes fraction", fontsize=9, color="#555555", va="top")
+    ax.annotate("Por municipios · Fuente: ISTAC", xy=(0.01, 0.98), xycoords="axes fraction", fontsize=9, color="#555555", va="top")
     ax.axis("off")
     fig.tight_layout()
 
@@ -363,7 +363,7 @@ def plot_mapa_generico(context: AssetExecutionContext) -> None:
     titulo = f"{label_val} — Tenerife {año}"
     ax.set_title(titulo, fontsize=14, fontweight="bold", pad=12)
     ax.annotate(
-        f"Por sección censal · {dataset_name} · Fuente: ISTAC",
+        f"Por municipios · {dataset_name} · Fuente: ISTAC",
         xy=(0.01, 0.98), xycoords="axes fraction",
         fontsize=9, color="#555555", va="top",
     )
