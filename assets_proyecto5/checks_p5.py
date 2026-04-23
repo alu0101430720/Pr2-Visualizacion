@@ -470,7 +470,7 @@ def check_cobertura_join_geojson(context, preprocesar_datos_p5: str):
     asset=plot_distribucion_lineas,
     description="Verifica precondiciones de datos para plot_distribucion_lineas.",
 )
-def check_datos_distribucion_lineas(context, preprocesar_datos_p5: str):
+def check_datos_distribucion_lineas(context):
     """
     ¿Por qué este check?
     El gráfico de líneas con banda IQR necesita al menos 3 puntos temporales
@@ -520,7 +520,7 @@ def check_datos_distribucion_lineas(context, preprocesar_datos_p5: str):
     asset=plot_actividad_barras,
     description="Verifica precondiciones para plot_actividad_barras.",
 )
-def check_datos_actividad_barras(context, preprocesar_datos_p5: str):
+def check_datos_actividad_barras(context):
     """
     ¿Por qué este check?
     Las barras apiladas son sensibles a valores nulos en num_casos
@@ -579,7 +579,7 @@ def check_datos_actividad_barras(context, preprocesar_datos_p5: str):
     asset=plot_ocupacion_divergente,
     description="Verifica precondiciones para plot_ocupacion_divergente.",
 )
-def check_datos_ocupacion_divergente(context, preprocesar_datos_p5: str):
+def check_datos_ocupacion_divergente(context):
     """
     ¿Por qué este check?
     El gráfico divergente H-M calcula una resta. Si falta uno de los dos sexos
@@ -629,7 +629,7 @@ def check_datos_ocupacion_divergente(context, preprocesar_datos_p5: str):
     asset=plot_renta_cajas,
     description="Verifica precondiciones para plot_renta_cajas.",
 )
-def check_datos_renta_cajas(context, preprocesar_datos_p5: str):
+def check_datos_renta_cajas(context):
     """
     ¿Por qué este check?
     El boxplot + jitter ordena por mediana y filtra top 15. Si el dataset
@@ -692,7 +692,7 @@ def check_datos_renta_cajas(context, preprocesar_datos_p5: str):
     asset=plot_mapa_distribucion_renta,
     description="Verifica precondiciones para plot_mapa_distribucion_renta.",
 )
-def check_datos_mapa_distribucion(context, preprocesar_datos_p5: str):
+def check_datos_mapa_distribucion(context):
     """
     ¿Por qué este check?
     Un mapa con cobertura baja muestra secciones grises sin aviso;
@@ -752,7 +752,7 @@ def check_datos_mapa_distribucion(context, preprocesar_datos_p5: str):
     asset=plot_brecha_salarial,
     description="Verifica precondiciones para plot_brecha_salarial (slope chart).",
 )
-def check_datos_brecha_salarial(context, preprocesar_datos_p5: str):
+def check_datos_brecha_salarial(context):
     """
     ¿Por qué este check?
     El slope chart cruza dos datasets. Si el join municipio×año falla
@@ -823,7 +823,7 @@ def check_datos_brecha_salarial(context, preprocesar_datos_p5: str):
     asset=plot_mapa_brecha_salarial,
     description="Verifica precondiciones para plot_mapa_brecha_salarial.",
 )
-def check_datos_mapa_brecha(context, preprocesar_datos_p5: str):
+def check_datos_mapa_brecha(context):
     """
     ¿Por qué este check?
     El mapa divergente usa TwoSlopeNorm centrado en 0. Si todos los
@@ -888,7 +888,7 @@ def check_datos_mapa_brecha(context, preprocesar_datos_p5: str):
     asset=plot_mapa_generico,
     description="Verifica precondiciones para plot_mapa_generico.",
 )
-def check_datos_mapa_generico(context, preprocesar_datos_p5: str):
+def check_datos_mapa_generico(context):
     """
     ¿Por qué este check?
     El mapa genérico es el más flexible del pipeline pero el más
@@ -940,7 +940,7 @@ def check_datos_mapa_generico(context, preprocesar_datos_p5: str):
     asset=plot_renta_violin,
     description="Verifica precondiciones para el violín de renta por fuente de ingresos.",
 )
-def check_datos_renta_violin(context, preprocesar_datos_p5: str):
+def check_datos_renta_violin(context):
     """
     ¿Por qué este check?
     El violín no es fiable con n < 30 por grupo (la estimación KDE
