@@ -225,7 +225,7 @@ def check_conteo_municipios(context, preprocesar_datos_p5: str):
             report_md += f"\n⚠️ Municipios no categorizados: {', '.join(desconocidos)}\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         metadata={"Balance_Islas": MetadataValue.md(report_md)},
     )
 
@@ -262,7 +262,7 @@ def check_temporal_y_sexo(context, preprocesar_datos_p5: str):
                     report_md += f"- **{col_sexo}**: 🟢 Correcto\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         metadata={"Reporte_Estructural": MetadataValue.md(report_md)},
     )
 
@@ -371,7 +371,7 @@ def check_suma_componentes_distribucion(context, preprocesar_datos_p5: str):
         report_md += desviadas.head(20).to_markdown(index=False)
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Suma_Componentes": MetadataValue.md(report_md)},
     )
@@ -457,7 +457,7 @@ def check_cobertura_join_geojson(context, preprocesar_datos_p5: str):
                 )
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Cobertura_Municipio": MetadataValue.md(report_md)},
     )
@@ -510,7 +510,7 @@ def check_datos_distribucion_lineas(context, preprocesar_datos_p5: str):
     report_md += f"- OBS_VALUE ∈ [0,100]: {'🟢' if ok else '🔴'} ({fuera} fuera de rango)\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Lineas": MetadataValue.md(report_md)},
     )
@@ -569,7 +569,7 @@ def check_datos_actividad_barras(context, preprocesar_datos_p5: str):
     report_md += f"- Actividades válidas (sin 'No consta'): {'🟢' if ok else '🔴'} ({n_acts})\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Actividad": MetadataValue.md(report_md)},
     )
@@ -619,7 +619,7 @@ def check_datos_ocupacion_divergente(context, preprocesar_datos_p5: str):
     report_md += f"- Divergencia real (valores + y −): {'🟢' if ok else '🔴'}\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Divergente": MetadataValue.md(report_md)},
     )
@@ -682,7 +682,7 @@ def check_datos_renta_cajas(context, preprocesar_datos_p5: str):
     report_md += f"- Años {AÑOS_ESPERADOS} presentes: {'🟢' if ok else '🔴'} ({años})\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Cajas": MetadataValue.md(report_md)},
     )
@@ -742,7 +742,7 @@ def check_datos_mapa_distribucion(context, preprocesar_datos_p5: str):
         report_md += f"- Outliers extremos (IQR×3): {'🟢' if ok else '⚠️'} {outliers} detectados\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Mapa_Dist": MetadataValue.md(report_md)},
     )
@@ -813,7 +813,7 @@ def check_datos_brecha_salarial(context, preprocesar_datos_p5: str):
     report_md += f"- Índice con valores + y −: {'🟢' if ok else '🔴'}\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Brecha": MetadataValue.md(report_md)},
     )
@@ -878,7 +878,7 @@ def check_datos_mapa_brecha(context, preprocesar_datos_p5: str):
     report_md += f"- TwoSlopeNorm viable (+ y − en año={AÑO_MAPA}): {'🟢' if ok else '🔴'}\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Mapa_Brecha": MetadataValue.md(report_md)},
     )
@@ -930,7 +930,7 @@ def check_datos_mapa_generico(context, preprocesar_datos_p5: str):
     report_md += f"- Registros tras aplicar filtros: {'🟢' if ok else '🔴'} ({n})\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Mapa_Generico": MetadataValue.md(report_md)},
     )
@@ -965,7 +965,7 @@ def check_datos_renta_violin(context, preprocesar_datos_p5: str):
     report_md += f"- n ≥ 30 por componente (KDE fiable): {'🟢' if ok else '🔴'} (insuf: {insuf or '–'})\n"
 
     return AssetCheckResult(
-        passed=passed,
+        passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Violin": MetadataValue.md(report_md)},
     )
