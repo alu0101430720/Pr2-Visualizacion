@@ -543,3 +543,50 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     plt.close(fig)
     
     context.add_output_metadata({"plot": MetadataValue.md(f"![Mapa Brecha Salarial]({out_path})")})
+
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_renta_violin(context: AssetExecutionContext) -> None:
+    df = pd.read_csv(
+        get_processed_path("distribucion-renta-ingresos.csv")
+    ).dropna(subset=["OBS_VALUE"])
+ 
+    LABELS = {
+        "OTRAS_PRESTACIONES":     "Otras prestaciones",
+        "OTROS_INGRESOS":         "Otros ingresos",
+        "PENSIONES":              "Pensiones",
+        "PRESTACIONES_DESEMPLEO": "Prest. desempleo",
+        "SUELDOS_SALARIOS":       "Sueldos y salarios",
+    }
+    df["componente"] = df["MEDIDAS_CODE"].map(LABELS)
+ 
+    p = (
+        ggplot(df, aes(x="componente", y="OBS_VALUE", fill="componente"))
+        + geom_violin(trim=False, alpha=0.7, color="white")
+        + geom_boxplot(
+            width=0.12, fill="white", color="#333333",
+            outlier_shape=None, alpha=0.9,
+        )
+        + scale_fill_brewer(type="qual", palette="Set2", guide=None)
+        + coord_flip()
+        + labs(
+            title="Distribución del peso de cada fuente de ingresos — Tenerife",
+            subtitle="% sobre renta total por sección censal · 2021-2023 · forma completa de la distribución",
+            x=None,
+            y="% sobre renta total",
+            caption="Fuente: ISTAC",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(12, 6),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            axis_text_y=element_text(size=10),
+            panel_grid_major_y=element_blank(),
+        )
+    )
+ 
+    out_path = os.path.join(get_plot_dir(), "renta_violin.png")
+    p.save(out_path, width=12, height=6, dpi=150, verbose=False)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Renta Violin]({out_path})")}
+    )
