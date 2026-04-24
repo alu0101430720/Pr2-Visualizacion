@@ -22,6 +22,7 @@ from plots_assets import (
     plot_gini_evolucion_islas,
     plot_brecha_salarial_islas,
     plot_brecha_vs_renta,
+    plot_precariedad_genero,
     _load_gini,
     _load_rentas,
     ISLAS_ORDEN,
@@ -1479,10 +1480,10 @@ def check_datos_brecha_islas(context):
     from plots_assets import get_plot_config
     cfg = get_plot_config()["brecha_salarial"]
     
-    ocu = pd.read_csv(os.path.join("..", "data-P5", "processed", cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    ocu = pd.read_csv(os.path.join("..", "data-P5", "processed", "contratos_202603.csv")).dropna(subset=["Contratos"])
     dist = pd.read_csv(os.path.join("..", "data-P5", "processed", cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
     
-    n_mun = len(set(ocu["municipio"]) & set(dist["municipio"]))
+    n_mun = len(set(ocu["Municipio"]) & set(dist["municipio"]))
     passed = n_mun >= 40
     
     report_md = "### Precondiciones: Brecha Salarial Islas\n\n"
@@ -1514,4 +1515,28 @@ def check_datos_brecha_renta(context):
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Brecha_Renta": MetadataValue.md(report_md)},
+    )
+
+@asset_check(
+    asset=plot_precariedad_genero,
+    description="Precondiciones para el gráfico de precariedad por género.",
+)
+def check_datos_precariedad(context):
+    df = pd.read_csv(os.path.join("..", "data-P5", "processed", "contratos_202603.csv")).dropna(subset=["Contratos"])
+    
+    n_contratos = df["Contratos"].sum()
+    has_sexo = set(["Hombres", "Mujeres"]).issubset(set(df["sexo"]))
+    has_tipos = len(df["Tipo Contrato"].unique()) > 2
+    
+    passed = n_contratos > 1000 and has_sexo and has_tipos
+    
+    report_md = "### Precondiciones: Precariedad por Género\n\n"
+    report_md += f"- Total de contratos analizados: {int(n_contratos):,}\n"
+    report_md += f"- Datos de ambos sexos presentes: {'🟢' if has_sexo else '🔴'}\n"
+    report_md += f"- Variedad en tipos de contrato: {'🟢' if has_tipos else '🔴'}\n"
+    
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_Precariedad": MetadataValue.md(report_md)},
     )

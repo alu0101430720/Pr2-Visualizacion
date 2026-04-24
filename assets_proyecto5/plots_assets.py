@@ -685,7 +685,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ══════════════════════════════════════════════════════════════════════════════
-# G9 — Boxplot: Distribución de la brecha salarial por isla (2023)
+# G9 — Boxplot: Distribución de la brecha salarial por isla (Toda Canarias)
 # ══════════════════════════════════════════════════════════════════════════════
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
@@ -693,33 +693,36 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["brecha_salarial"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
     
-    ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
-
+    # 1. Cargar Contratos (Proxy de Oportunidad Laboral)
+    ocu = pd.read_csv(get_processed_path("contratos_202603.csv")).dropna(subset=["Contratos"])
+    ocu = ocu.rename(columns={"Municipio": "municipio"})
+    
     ocu_hm = (
-        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
-        .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"].sum()
-        .pivot(index=["municipio", "año"], columns="sexo", values="num_casos")
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"])]
+        .groupby(["municipio", "sexo"], as_index=False)["Contratos"].sum()
+        .pivot(index="municipio", columns="sexo", values="Contratos")
         .reset_index()
+        .fillna(0)
     )
     ocu_hm.columns.name = None
-    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"] + 1e-9)
 
+    # 2. Cargar Dependencia Salarial
+    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
     sal = (
-        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
-        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
+        dist[(dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS") & (dist["año"] == AÑO_MAPA)]
+        .groupby("municipio", as_index=False)["OBS_VALUE"].median()
         .rename(columns={"OBS_VALUE": "pct_salarios"})
     )
 
-    merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    # 3. Merge y cálculo de brecha
+    merged = ocu_hm.merge(sal, on="municipio", how="inner")
     merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
     
-    # Filtrar año y añadir isla
-    df = merged[merged["año"] == AÑO_MAPA].copy()
+    df = merged.copy()
     df["isla"] = df["municipio"].apply(inferir_isla)
     df = df[df["isla"] != "Desconocida"]
     
-    # Ordenar islas por mediana
     orden = df.groupby("isla")["indice_brecha"].median().sort_values().index.tolist()
     df["isla"] = pd.Categorical(df["isla"], categories=orden, ordered=True)
 
@@ -731,16 +734,16 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
         + scale_fill_brewer(type="qual", palette="Set2", guide=None)
         + coord_flip()
         + labs(
-            title=f"Distribución de la brecha salarial por isla — Prov. S/C Tenerife ({AÑO_MAPA})",
-            subtitle="Índice > 0: Favorable a hombres · Índice < 0: Favorable a mujeres\nPuntos = Municipios",
-            x=None, y="Índice de brecha salarial ponderado",
+            title="Distribución de la brecha de género por isla — Toda Canarias",
+            subtitle="Índice > 0: Contratación favorable a hombres · Índice < 0: Favorable a mujeres\nPuntos = Municipios · Proxy: Contratos marzo 2026 × Dependencia Salarial 2023",
+            x=None, y="Índice de brecha salarial/laboral ponderado",
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
         + theme(
             figure_size=(10, 6),
             plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
+            plot_subtitle=element_text(size=9, color="#555555"),
             axis_text_y=element_text(size=11, face="bold"),
             panel_grid_minor=element_blank(),
             panel_grid_major_y=element_blank(),
@@ -753,39 +756,40 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
     )
 
 # ══════════════════════════════════════════════════════════════════════════════
-# G10 — Scatter: Brecha Salarial vs Renta Bruta Media (2023)
+# G10 — Scatter: Brecha Salarial vs Renta Bruta Media (Toda Canarias)
 # ══════════════════════════════════════════════════════════════════════════════
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_brecha_vs_renta(context: AssetExecutionContext) -> None:
     from checks_p5 import inferir_isla
     cfg_brecha = get_plot_config()["brecha_salarial"]
+    cfg_renta = get_plot_config()["renta_cajas"]
     AÑO_MAPA = cfg_brecha.get("ano_mapa", 2023)
     
-    # 1. Calcular Brecha
-    ocu  = pd.read_csv(get_processed_path(cfg_brecha["dataset_ocu"])).dropna(subset=["num_casos"])
-    dist = pd.read_csv(get_processed_path(cfg_brecha["dataset_dist"])).dropna(subset=["OBS_VALUE"])
-
+    # 1. Calcular Brecha con Contratos
+    ocu = pd.read_csv(get_processed_path("contratos_202603.csv")).dropna(subset=["Contratos"])
+    ocu = ocu.rename(columns={"Municipio": "municipio"})
+    
     ocu_hm = (
-        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
-        .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"].sum()
-        .pivot(index=["municipio", "año"], columns="sexo", values="num_casos")
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"])]
+        .groupby(["municipio", "sexo"], as_index=False)["Contratos"].sum()
+        .pivot(index="municipio", columns="sexo", values="Contratos")
         .reset_index()
+        .fillna(0)
     )
     ocu_hm.columns.name = None
-    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"] + 1e-9)
 
+    dist = pd.read_csv(get_processed_path(cfg_brecha["dataset_dist"])).dropna(subset=["OBS_VALUE"])
     sal = (
-        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
-        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
+        dist[(dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS") & (dist["año"] == AÑO_MAPA)]
+        .groupby("municipio", as_index=False)["OBS_VALUE"].median()
         .rename(columns={"OBS_VALUE": "pct_salarios"})
     )
 
-    brecha = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    brecha = ocu_hm.merge(sal, on="municipio", how="inner")
     brecha["indice_brecha"] = (brecha["ratio_hm"] - 0.5) * brecha["pct_salarios"]
-    brecha = brecha[brecha["año"] == AÑO_MAPA][["municipio", "indice_brecha"]]
     
     # 2. Cargar Renta Media
-    cfg_renta = get_plot_config()["renta_cajas"]
     renta_df = pd.read_csv(get_processed_path(cfg_renta["dataset"])).dropna(subset=["OBS_VALUE"])
     renta = (
         renta_df[(renta_df["año"] == AÑO_MAPA) & (renta_df["MEDIDAS_CODE"] == cfg_renta["medida"])]
@@ -801,7 +805,6 @@ def plot_brecha_vs_renta(context: AssetExecutionContext) -> None:
     med_r = float(df["renta_media"].median())
     med_b = float(df["indice_brecha"].median())
     
-    # Outliers para etiquetar
     df["label"] = df.apply(
         lambda r: r["municipio"] if (r["indice_brecha"] > df["indice_brecha"].quantile(0.9) or 
                                      r["renta_media"] > df["renta_media"].quantile(0.9) or
@@ -818,10 +821,10 @@ def plot_brecha_vs_renta(context: AssetExecutionContext) -> None:
         + geom_text(aes(label="label"), size=7, nudge_y=0.15, color="#333333", ha="center")
         + scale_color_brewer(type="qual", palette="Set2", name="Isla")
         + labs(
-            title=f"Brecha salarial vs Nivel adquisitivo — Prov. S/C Tenerife ({AÑO_MAPA})",
-            subtitle="¿Tienen los municipios más ricos una menor brecha salarial? · Líneas = Medianas",
+            title="Brecha de género vs Nivel adquisitivo — Toda Canarias",
+            subtitle="¿Tienen los municipios más ricos una menor brecha laboral? · Líneas = Medianas",
             x=f"{cfg_renta['medida'].replace('_', ' ').title()} (€)",
-            y="Índice de brecha salarial ponderado",
+            y="Índice de brecha salarial/laboral ponderado",
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
@@ -837,4 +840,84 @@ def plot_brecha_vs_renta(context: AssetExecutionContext) -> None:
     p.save(out, width=11, height=7, dpi=150, verbose=False)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Brecha vs Renta]({out})")}
+    )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G11 — Barras Divergentes: Precariedad por Género
+# ══════════════════════════════════════════════════════════════════════════════
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_precariedad_genero(context: AssetExecutionContext) -> None:
+    """
+    Gráfico que muestra la proporción de contratos indefinidos vs temporales a tiempo parcial
+    entre hombres y mujeres, demostrando la brecha de precariedad.
+    """
+    df = pd.read_csv(get_processed_path("contratos_202603.csv")).dropna(subset=["Contratos"])
+    
+    # Agrupar por sexo y tipo de contrato a nivel regional
+    agrupado = df.groupby(["sexo", "Tipo Contrato"], as_index=False)["Contratos"].sum()
+    
+    # Calcular % dentro de cada sexo
+    total_por_sexo = agrupado.groupby("sexo")["Contratos"].transform("sum")
+    agrupado["pct"] = agrupado["Contratos"] / total_por_sexo * 100
+    
+    # Simplificar categorías de contrato para el storytelling
+    def mapear_contrato(tc):
+        if "Indefinido" in tc: return "Indefinido"
+        if "Tiempo Parcial" in tc: return "Temporal Parcial"
+        if "Tiempo Completo" in tc: return "Temporal Completo"
+        return "Otros"
+        
+    agrupado["categoria"] = agrupado["Tipo Contrato"].apply(mapear_contrato)
+    
+    resumen = agrupado.groupby(["sexo", "categoria"], as_index=False)["pct"].sum()
+    
+    # Diverging: Indefinido y Temporal Completo a la derecha (positivo), Temporal Parcial a la izquierda (negativo)
+    resumen["pct_plot"] = resumen.apply(
+        lambda r: -r["pct"] if r["categoria"] in ["Temporal Parcial", "Otros"] else r["pct"], axis=1
+    )
+    
+    cat_orden = ["Temporal Parcial", "Otros", "Temporal Completo", "Indefinido"]
+    resumen["categoria"] = pd.Categorical(resumen["categoria"], categories=cat_orden, ordered=True)
+    
+    p = (
+        ggplot(resumen, aes(x="sexo", y="pct_plot", fill="categoria"))
+        + geom_hline(yintercept=0, color="#333333", size=1.2)
+        + geom_col(width=0.6, alpha=0.9, color="white", size=0.5)
+        + geom_text(
+            aes(label="round(pct, 1).astype(str) + '%'"), 
+            position=position_stack(vjust=0.5), size=10, color="white", fontdict={'weight': 'bold'}
+        )
+        + coord_flip()
+        + scale_fill_manual(
+            values={
+                "Indefinido": "#2a9d8f", 
+                "Temporal Completo": "#e9c46a", 
+                "Temporal Parcial": "#e76f51", 
+                "Otros": "#cccccc"
+            },
+            name="Tipo de Contrato"
+        )
+        + labs(
+            title="La Brecha de Precariedad: Tipos de Contrato por Género",
+            subtitle="Porcentaje de contratos firmados en Canarias (Marzo 2026)\nIzquierda: Mayor precariedad · Derecha: Mayor estabilidad",
+            x=None, y="Porcentaje (%)",
+            caption="Fuente: ISTAC"
+        )
+        + scale_y_continuous(labels=lambda lst: [f"{abs(x):.0f}%" for x in lst])
+        + theme_minimal()
+        + theme(
+            figure_size=(10, 5),
+            plot_title=element_text(size=14, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            axis_text_y=element_text(size=12, face="bold"),
+            panel_grid_major_y=element_blank(),
+            panel_grid_minor=element_blank(),
+            legend_position="bottom"
+        )
+    )
+    
+    out = os.path.join(get_plot_dir(), "precariedad_genero.png")
+    p.save(out, width=10, height=5, dpi=150, verbose=False)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Precariedad Genero]({out})")}
     )

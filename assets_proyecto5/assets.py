@@ -91,7 +91,8 @@ def preprocesar_datos_p5() -> str:
         filename = os.path.basename(file_path)
         logger.info(f"Procesando CSV: {filename}")
         try:
-            df = pd.read_csv(file_path)
+            sep = ';' if 'contratos' in filename else ','
+            df = pd.read_csv(file_path, sep=sep)
             df.columns = df.columns.str.strip()
             for col in df.select_dtypes(include=["object"]).columns:
                 try:
@@ -180,6 +181,7 @@ def preprocesar_datos_p5() -> str:
         "plot_gini_evolucion_islas",
         "plot_brecha_salarial_islas",
         "plot_brecha_vs_renta",
+        "plot_precariedad_genero",
     ],
     group_name="publicacion",
     description=(
