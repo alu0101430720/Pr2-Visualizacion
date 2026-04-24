@@ -95,7 +95,7 @@ def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
             plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
             panel_grid_minor=element_blank(),
-            panel_grid_major_x=element_blank(),
+            panel_grid_major_y=element_line(color="#dddddd", size=0.5), panel_grid_major_x=element_blank(),
             legend_position="bottom",
             legend_title=element_blank(),
         )
@@ -136,7 +136,7 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
             plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
             strip_text=element_text(size=9, face="bold"),
-            panel_grid_major_x=element_blank(),
+            panel_grid_major_y=element_line(color="#dddddd", size=0.5), panel_grid_major_x=element_blank(),
             legend_position="bottom",
         )
     )
@@ -418,8 +418,9 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         lambda d: "Brecha aumenta" if d > UMBRAL else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante")
     )
 
+    TOP_N_FIXED = 5
     slope["brecha_media"] = (slope["brecha_ini"] + slope["brecha_fin"]) / 2
-    top = slope.nlargest(TOP_N, "brecha_media")
+    top = slope.nlargest(TOP_N_FIXED, "brecha_media")
 
     long = pd.concat([
         top.assign(año=AÑO_INI, brecha=top["brecha_ini"]),
@@ -434,26 +435,38 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         "Brecha disminuye":     "#2B6CB0",
         "Sin cambio relevante": "#AAAAAA",
     }
+    
+    long_ini = long[long["año"] == AÑO_INI]
+    long_fin = long[long["año"] == AÑO_FIN]
 
     p = (
         ggplot(long, aes(x="año_cat", y="brecha", group="municipio", color="direccion"))
         + geom_hline(yintercept=mediana_global, linetype="dashed", color="#888888", size=0.5, alpha=0.7)
         + geom_line(size=0.9, alpha=0.8)
         + geom_point(size=2.5, stroke=0.3)
-        # ── geom_text eliminado ──────────────────────────────────────────────
+        + geom_text(
+            aes(label="municipio"), 
+            data=long_ini,
+            ha="right", nudge_x=-0.05, size=9
+        )
+        + geom_text(
+            aes(label="municipio"), 
+            data=long_fin,
+            ha="left", nudge_x=0.05, size=9
+        )
         + scale_color_manual(values=COLORES, name=None)
-        + scale_x_discrete(expand=(0, 0.1))  # reducido: ya no hay espacio para etiquetas
+        + scale_x_discrete(expand=(0.3, 0))  # espacio para etiquetas
         + labs(
             title="Evolución de la brecha salarial de género por municipio",
-            subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top {TOP_N} municipios · {AÑO_INI}→{AÑO_FIN}",
+            subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top {TOP_N_FIXED} municipios · {AÑO_INI}→{AÑO_FIN}",
             x=None, y="Índice de brecha salarial ponderado",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
         + theme_minimal()
         + theme(
-            figure_size=(11, 9),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=9, color="#555555"),
+            figure_size=(10, 6),
+            plot_title=element_text(size=14, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
             panel_grid=element_blank(),
             axis_text_x=element_text(size=11, face="bold"),
             axis_text_y=element_text(size=8, color="#888888"),
@@ -643,25 +656,26 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     canarias  = df[df["TERRITORIO"] == "Canarias"]
     islas_sin = df[df["TERRITORIO"] != "Canarias"]
 
+    islas_sin["is_tourist"] = islas_sin["TERRITORIO"].isin(["Tenerife", "Gran Canaria", "Lanzarote", "Fuerteventura"])
+    islas_sin["is_tourist"] = pd.Categorical(islas_sin["is_tourist"], categories=[True, False], ordered=True)
+
     p = (
         ggplot(islas_sin,
                aes(x="TIME_PERIOD", y="OBS_VALUE",
-                   color="TERRITORIO", group="TERRITORIO"))
-        + geom_line(data=canarias,
-                    mapping=aes(x="TIME_PERIOD", y="OBS_VALUE"),
-                    color="#CCCCCC", size=1.3, linetype="dashed",
-                    inherit_aes=False)
-        + geom_vline(xintercept=2020, linetype="dotted",
-                     color="#AAAAAA", size=0.6)
+                   color="TERRITORIO", group="TERRITORIO", 
+                   alpha="is_tourist", size="is_tourist"))
+        + geom_vline(xintercept=2020, linetype="dotted", color="#AAAAAA", size=0.6)
         + annotate("text", x=2020.2, y=df["OBS_VALUE"].max() - 0.3,
                    label="2020\nCOVID", size=7, color="#999999", ha="left")
-        + geom_line(size=1.1, alpha=0.9)
-        + geom_point(size=2.2, stroke=0.3)
+        + geom_line()
+        + geom_point(stroke=0.3)
         + scale_x_continuous(breaks=list(range(2015, 2024)))
         + scale_color_brewer(type="qual", palette="Set2", name="Isla")
+        + scale_alpha_manual(values={True: 1.0, False: 0.3}, guide=None)
+        + scale_size_manual(values={True: 2.0, False: 0.8}, guide=None)
         + labs(
             title="Evolución del Índice de Gini por isla — Canarias 2015-2023",
-            subtitle="Línea gris = Canarias agregado · valores altos = mayor desigualdad",
+            subtitle="Islas más pobladas y turísticas destacadas · Valores altos = mayor desigualdad",
             x=None, y="Índice de Gini",
             caption="Fuente: ISTAC",
         )
@@ -670,9 +684,9 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
             figure_size=(13, 6),
             plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
-            axis_text_x=element_text(angle=45, ha="right", size=8),
+            axis_text_x=element_text(size=9),
             panel_grid_minor=element_blank(),
-            panel_grid_major_x=element_blank(),
+            panel_grid_major_y=element_line(color="#dddddd", size=0.5), panel_grid_major_x=element_blank(),
             legend_position="right",
         )
     )
@@ -1031,15 +1045,19 @@ def plot_covid_prestaciones_islas(context: AssetExecutionContext) -> None:
 
 
 def _plot_covid_lineas(context, medida, ylabel, ylim, titulo, fname):
-    """Función auxiliar compartida por los dos plots COVID."""
     import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
 
     rentas = pd.read_csv(get_processed_path("rentas.csv")).dropna(subset=["OBS_VALUE"])
 
     ISLAS_TURISTICAS = {"Lanzarote", "Fuerteventura", "Tenerife"}
     ISLAS_RESTO      = {"Gran Canaria", "La Palma", "La Gomera", "El Hierro"}
-    COLOR_TUR  = {"Lanzarote": "#e9c46a", "Fuerteventura": "#f4a261", "Tenerife": "#e07b39"}
-    COLOR_REST = "#b0bec5"
+    
+    # Paleta cualitativa para todas las islas
+    COLORES = {
+        "Lanzarote": "#e9c46a", "Fuerteventura": "#f4a261", "Tenerife": "#e07b39",
+        "Gran Canaria": "#457b9d", "La Palma": "#2a9d8f", "La Gomera": "#8ab17d", "El Hierro": "#b5838d"
+    }
 
     fig, ax = plt.subplots(figsize=(13, 6))
     fig.patch.set_facecolor("white")
@@ -1051,36 +1069,30 @@ def _plot_covid_lineas(context, medida, ylabel, ylim, titulo, fname):
             "COVID-19", fontsize=8.5, color="#c0392b",
             fontweight="bold", va="top")
 
-    # Resto de islas — gris fino
+    # Dibujar todas las islas, destacando las turísticas
+    handles = []
+    
+    # Primero el resto (fondo)
     for isla in ISLAS_RESTO:
         sub = rentas[(rentas["TERRITORIO"] == isla) &
                      (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
+        col = COLORES[isla]
         ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
-                color=COLOR_REST, lw=1.0, marker="o", markersize=2.5,
-                alpha=0.5, zorder=2)
+                color=col, lw=1.5, marker="o", markersize=3,
+                alpha=0.3, zorder=2)
+        handles.append(mpatches.Patch(color=col, label=isla, alpha=0.3))
 
-    # Etiqueta única para el resto
-    sub_gc = rentas[(rentas["TERRITORIO"] == "Gran Canaria") &
-                    (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
-    ax.text(sub_gc.iloc[-1]["TIME_PERIOD"] + 0.1,
-            sub_gc.iloc[-1]["OBS_VALUE"],
-            "Resto de islas\n(Gran Canaria, La Palma,\nLa Gomera, El Hierro)", fontsize=8.5, color=COLOR_REST,
-            va="center", ha="left", alpha=0.9)
-
-    # Islas turísticas — color, gruesas, etiquetadas
+    # Luego turísticas (figura)
     for isla in ISLAS_TURISTICAS:
         sub = rentas[(rentas["TERRITORIO"] == isla) &
                      (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
-        col = COLOR_TUR[isla]
+        col = COLORES[isla]
         ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
-                color=col, lw=2.5, marker="o", markersize=5,
+                color=col, lw=3.0, marker="o", markersize=6,
                 alpha=1.0, zorder=4)
-        ax.text(sub.iloc[-1]["TIME_PERIOD"] + 0.1,
-                sub.iloc[-1]["OBS_VALUE"],
-                isla, fontsize=9.5, fontweight="bold",
-                color=col, va="center", ha="left")
+        handles.append(mpatches.Patch(color=col, label=isla, alpha=1.0))
 
-    ax.set_xlim(2014.8, 2024.8)
+    ax.set_xlim(2014.8, 2023.2)
     ax.set_xticks(range(2015, 2024))
     ax.set_xticklabels(range(2015, 2024), fontsize=8.5)
     ax.set_ylabel(ylabel, fontsize=10)
@@ -1088,6 +1100,10 @@ def _plot_covid_lineas(context, medida, ylabel, ylim, titulo, fname):
     ax.spines[["top", "right"]].set_visible(False)
     ax.set_xlabel(None)
     ax.set_title(titulo, fontsize=13, fontweight="bold", pad=12)
+    
+    ax.legend(handles=handles, loc="center left", bbox_to_anchor=(1.02, 0.5), 
+              fontsize=9, frameon=False, title="Islas")
+
     fig.text(0.99, 0.01, "Fuente: ISTAC", ha="right", fontsize=8, color="#888888")
 
     plt.tight_layout()
