@@ -178,9 +178,8 @@ def preprocesar_datos_p5() -> str:
         "plot_mapa_brecha_salarial",
         "plot_renta_violin",
         "plot_gini_evolucion_islas",
-        "plot_gini_scatter_sueldos",
-        "plot_gini_heatmap_tenerife",
-        "plot_p8020_vs_gini_islas",
+        "plot_brecha_salarial_islas",
+        "plot_brecha_vs_renta",
     ],
     group_name="publicacion",
     description=(

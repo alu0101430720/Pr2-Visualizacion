@@ -20,9 +20,8 @@ from plots_assets import (
     get_plot_config,
     get_plot_dir,
     plot_gini_evolucion_islas,
-    plot_gini_scatter_sueldos,
-    plot_gini_heatmap_tenerife,
-    plot_p8020_vs_gini_islas,
+    plot_brecha_salarial_islas,
+    plot_brecha_vs_renta,
     _load_gini,
     _load_rentas,
     ISLAS_ORDEN,
@@ -1473,159 +1472,46 @@ def check_datos_gini_evolucion(context):
 
 
 @asset_check(
-    asset=plot_gini_scatter_sueldos,
-    description="Precondiciones para plot_gini_scatter_sueldos.",
+    asset=plot_brecha_salarial_islas,
+    description="Precondiciones para el boxplot de brecha salarial territorial.",
 )
-def check_datos_gini_scatter(context):
-    """
-    Gestalt — Proximidad: el scatter cruza gini.csv con rentas.csv por
-    municipio y año. Si la intersección es < 80 municipios, la nube de puntos
-    pierde representatividad y los clusters insulares no emergen con claridad.
-    Figura/Fondo: outliers calculados por residuo OLS — verificar que la
-    varianza del Gini es suficiente para que la recta tenga sentido.
-    """
-    gini   = _load_gini()
-    rentas = _load_rentas()
-    passed = True
-    report_md = "### Precondiciones: gini_scatter_sueldos (2023)\n\n"
-
-    # Datos 2023 de ambos datasets
-    g23 = gini[(gini["MEDIDAS"] == "Índice de Gini") &
-               (gini["TIME_PERIOD"] == 2023) &
-               (gini["tipo_territorio"] == "municipio")]
-    r23 = rentas[(rentas["MEDIDAS"] == "Sueldos y salarios") &
-                 (rentas["TIME_PERIOD"] == 2023) &
-                 (rentas["tipo_territorio"] == "municipio")]
-
-    ok = len(g23) > 0 and len(r23) > 0
-    passed = passed and ok
-    report_md += f"- Datos 2023 presentes: {'🟢' if ok else '🔴'} (gini={len(g23)}, rentas={len(r23)})\n"
-
-    # Intersección suficiente
-    merged = g23.merge(r23, on="TERRITORIO")
-    n_join = len(merged)
-    ok     = n_join >= 80
-    passed = passed and ok
-    report_md += f"- Municipios en el join ≥ 80: {'🟢' if ok else '🔴'} ({n_join})\n"
-
-    # Varianza del Gini suficiente para una regresión con sentido
-    if n_join > 0:
-        std_gini = float(merged["OBS_VALUE_x"].std())
-        ok = std_gini > 1.0
-        passed = passed and ok
-        report_md += f"- Varianza Gini (std > 1): {'🟢' if ok else '🔴'} (std={std_gini:.2f})\n"
-
-    # Rango de sueldos coherente [0, 100]
-    fuera = int(((r23["OBS_VALUE"] < 0) | (r23["OBS_VALUE"] > 100)).sum())
-    ok    = fuera == 0
-    passed = passed and ok
-    report_md += f"- % sueldos ∈ [0,100]: {'🟢' if ok else '🔴'} ({fuera} fuera)\n"
-
+def check_datos_brecha_islas(context):
+    from plots_assets import get_plot_config
+    cfg = get_plot_config()["brecha_salarial"]
+    
+    ocu = pd.read_csv(os.path.join("..", "data-P5", "processed", cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    dist = pd.read_csv(os.path.join("..", "data-P5", "processed", cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
+    
+    n_mun = len(set(ocu["municipio"]) & set(dist["municipio"]))
+    passed = n_mun >= 40
+    
+    report_md = "### Precondiciones: Brecha Salarial Islas\n\n"
+    report_md += f"- Intersección de municipios suficiente (≥ 40): {'🟢' if passed else '🔴'} ({n_mun})\n"
+    
     return AssetCheckResult(
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Gini_Scatter": MetadataValue.md(report_md)},
+        metadata={"Check_Brecha_Islas": MetadataValue.md(report_md)},
     )
 
 
 @asset_check(
-    asset=plot_gini_heatmap_tenerife,
-    description="Precondiciones para plot_gini_heatmap_tenerife.",
+    asset=plot_brecha_vs_renta,
+    description="Precondiciones para el scatter plot de brecha salarial vs renta bruta media.",
 )
-def check_datos_gini_heatmap(context):
-    """
-    Gestalt — Similitud: el gradiente de color del heatmap solo es
-    interpretable si hay variación real en el Gini entre municipios. Con
-    un rango < 3 puntos el gradiente es visualmente plano (toda la paleta
-    comprimida en una franja estrecha).
-    Proximidad: la ordenación por Gini 2023 requiere que ese año esté
-    completo para todos los municipios de Tenerife.
-    """
-    df     = _load_gini()
-    passed = True
-    report_md = "### Precondiciones: gini_heatmap_tenerife\n\n"
-
-    tf = df[(df["MEDIDAS"] == "Índice de Gini") &
-            (df["tipo_territorio"] == "municipio") &
-            (df["TERRITORIO"].isin(MUNICIPIOS_TENERIFE))]
-
-    # Municipios de Tenerife con datos
-    n_mun = tf["TERRITORIO"].nunique()
-    ok    = n_mun >= 25
-    passed = passed and ok
-    report_md += f"- Municipios Tenerife ≥ 25: {'🟢' if ok else '🔴'} ({n_mun})\n"
-
-    # Año 2023 completo (necesario para la ordenación)
-    n_2023 = tf[tf["TIME_PERIOD"] == 2023]["TERRITORIO"].nunique()
-    ok     = n_2023 >= 25
-    passed = passed and ok
-    report_md += f"- Municipios con dato en 2023 ≥ 25: {'🟢' if ok else '🔴'} ({n_2023})\n"
-
-    # Variación suficiente para que el gradiente sea informativo
-    rango = float(tf["OBS_VALUE"].max() - tf["OBS_VALUE"].min())
-    ok    = rango >= 3.0
-    passed = passed and ok
-    report_md += f"- Rango Gini ≥ 3 puntos (gradiente visible): {'🟢' if ok else '🔴'} ({rango:.1f})\n"
-
-    # 9 años en el dataset (columnas del heatmap)
-    años = tf["TIME_PERIOD"].nunique()
-    ok   = años == 9
-    passed = passed and ok
-    report_md += f"- 9 años de datos: {'🟢' if ok else '🔴'} ({años})\n"
-
+def check_datos_brecha_renta(context):
+    from plots_assets import get_plot_config
+    cfg = get_plot_config()["renta_cajas"]
+    
+    renta = pd.read_csv(os.path.join("..", "data-P5", "processed", cfg["dataset"])).dropna(subset=["OBS_VALUE"])
+    n_mun = renta["municipio"].nunique()
+    
+    passed = n_mun >= 40
+    report_md = "### Precondiciones: Brecha vs Renta\n\n"
+    report_md += f"- Municipios con datos de renta suficientes (≥ 40): {'🟢' if passed else '🔴'} ({n_mun})\n"
+    
     return AssetCheckResult(
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Gini_Heatmap": MetadataValue.md(report_md)},
-    )
-
-
-@asset_check(
-    asset=plot_p8020_vs_gini_islas,
-    description="Precondiciones para plot_p8020_vs_gini_islas.",
-)
-def check_datos_p8020(context):
-    """
-    Gestalt — Continuidad: ambas métricas deben cubrir los mismos años para
-    que las dos líneas de cada facet sean comparables en el eje X.
-    Similitud: si P80/P20 falta para alguna isla, ese panel quedaría con una
-    sola línea, rompiendo la coherencia visual con los demás paneles del facet.
-    La escala Y libre exige que P80/P20 y Gini tengan rangos distintos —
-    si fueran iguales el free_y no aportaría ningún valor.
-    """
-    df     = _load_gini()
-    passed = True
-    report_md = "### Precondiciones: p8020_vs_gini_islas\n\n"
-
-    for medida in MEDIDAS_GINI:
-        sub = df[(df["MEDIDAS"] == medida) & (df["tipo_territorio"] == "isla")]
-
-        # Todas las islas presentes
-        islas_ok = set(ISLAS_ORDEN) - set(sub["TERRITORIO"].unique())
-        ok = len(islas_ok) == 0
-        passed = passed and ok
-        report_md += f"- `{medida}` en todas las islas: {'🟢' if ok else '🔴'} (faltan: {islas_ok or '–'})\n"
-
-        # 9 años por isla
-        por_isla = sub.groupby("TERRITORIO")["TIME_PERIOD"].nunique()
-        inc      = por_isla[por_isla < 9].index.tolist()
-        ok = len(inc) == 0
-        passed = passed and ok
-        report_md += f"- `{medida}` 9 años completos: {'🟢' if ok else '🔴'} (incompletas: {inc or '–'})\n"
-
-    # Rangos distintos entre métricas (confirma que free_y tiene sentido)
-    r_gini  = df[df["MEDIDAS"] == "Índice de Gini"]["OBS_VALUE"]
-    r_p8020 = df[df["MEDIDAS"] == "Distribución de la renta P80/P20"]["OBS_VALUE"]
-    rangos_solapan = (
-        r_gini.min() < r_p8020.max() and r_p8020.min() < r_gini.max()
-        and abs(r_gini.mean() - r_p8020.mean()) > 5
-    )
-    ok = rangos_solapan
-    passed = passed and ok
-    report_md += f"- Rangos distintos (justifica free_y): {'🟢' if ok else '⚠️'} (Gini ~{r_gini.mean():.1f}, P80/P20 ~{r_p8020.mean():.1f})\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_P8020": MetadataValue.md(report_md)},
+        metadata={"Check_Brecha_Renta": MetadataValue.md(report_md)},
     )

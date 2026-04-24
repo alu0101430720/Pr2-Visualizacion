@@ -684,244 +684,157 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# G9 — Scatter: Gini vs % sueldos/salarios por municipio (2023)
+# ══════════════════════════════════════════════════════════════════════════════
+# G9 — Boxplot: Distribución de la brecha salarial por isla (2023)
 # ══════════════════════════════════════════════════════════════════════════════
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_gini_scatter_sueldos(context: AssetExecutionContext) -> None:
+def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
     from checks_p5 import inferir_isla
-    """
-    IDONEIDAD: dos variables continuas × 88 municipios → el scatter es la
-    geometría canónica. Responde la pregunta central del Acto final del
-    storytelling: "¿los municipios más desiguales dependen menos de sueldos?"
-    Si la correlación es negativa, la desigualdad proviene de otras fuentes
-    (pensiones concentradas, otros ingresos), no del mercado laboral.
+    cfg = get_plot_config()["brecha_salarial"]
+    AÑO_MAPA = cfg.get("ano_mapa", 2023)
+    
+    ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
 
-    GESTALT:
-      Similitud   — color por isla agrupa municipios por territorio.
-      Proximidad  — clusters insulares emergen sin intervención explícita.
-      Figura/Fondo — outliers alejados de la tendencia lineal destacan
-                     sobre la nube central (etiquetados selectivamente).
-
-    DISEÑO:
-      Líneas de referencia en medianas (cuadrantes narrativos).
-      Tendencia OLS global en gris neutro (no compite con los puntos).
-      Etiquetas solo para municipios con residuo > 1.8σ de la recta
-      (outliers con historia que contar).
-      Alpha 0.75 para revelar densidad donde se solapan puntos.
-    """
-    gini   = _load_gini()
-    rentas = _load_rentas()
-
-    gini_2023 = (
-        gini[(gini["MEDIDAS"] == "Índice de Gini") &
-             (gini["TIME_PERIOD"] == 2023) &
-             (gini["tipo_territorio"] == "municipio")]
-        [["TERRITORIO", "OBS_VALUE"]].rename(columns={"OBS_VALUE": "gini"})
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"].sum()
+        .pivot(index=["municipio", "año"], columns="sexo", values="num_casos")
+        .reset_index()
     )
-    sal_2023 = (
-        rentas[(rentas["MEDIDAS"] == "Sueldos y salarios") &
-               (rentas["TIME_PERIOD"] == 2023) &
-               (rentas["tipo_territorio"] == "municipio")]
-        [["TERRITORIO", "OBS_VALUE"]].rename(columns={"OBS_VALUE": "pct_sueldos"})
-    )
-    df = gini_2023.merge(sal_2023, on="TERRITORIO")
-    df["isla"] = df["TERRITORIO"].apply(inferir_isla)
+    ocu_hm.columns.name = None
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
 
-    # Outliers por residuo de la recta OLS
-    coef        = np.polyfit(df["pct_sueldos"], df["gini"], 1)
-    df["resid"] = df["gini"] - (coef[0] * df["pct_sueldos"] + coef[1])
-    umbral      = df["resid"].std() * 1.8
-    df["label"] = df.apply(
-        lambda r: r["TERRITORIO"] if abs(r["resid"]) > umbral else "", axis=1
+    sal = (
+        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
+        .rename(columns={"OBS_VALUE": "pct_salarios"})
     )
 
-    med_g = float(df["gini"].median())
-    med_s = float(df["pct_sueldos"].median())
+    merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    
+    # Filtrar año y añadir isla
+    df = merged[merged["año"] == AÑO_MAPA].copy()
+    df["isla"] = df["municipio"].apply(inferir_isla)
+    df = df[df["isla"] != "Desconocida"]
+    
+    # Ordenar islas por mediana
+    orden = df.groupby("isla")["indice_brecha"].median().sort_values().index.tolist()
+    df["isla"] = pd.Categorical(df["isla"], categories=orden, ordered=True)
 
     p = (
-        ggplot(df, aes(x="pct_sueldos", y="gini", color="isla"))
-        + geom_hline(yintercept=med_g, linetype="dashed",
-                     color="#BBBBBB", size=0.5)
-        + geom_vline(xintercept=med_s, linetype="dashed",
-                     color="#BBBBBB", size=0.5)
-        + geom_smooth(method="lm", color="#444444", fill="#EEEEEE",
-                      size=0.8, alpha=0.25, inherit_aes=False,
-                      mapping=aes(x="pct_sueldos", y="gini"))
-        + geom_point(size=2.8, alpha=0.75, stroke=0.2)
-        + geom_text(aes(label="label"), size=7, nudge_y=0.3,
-                    color="#333333", ha="center")
-        + scale_color_brewer(type="qual", palette="Set2", name="Isla")
+        ggplot(df, aes(x="isla", y="indice_brecha", fill="isla"))
+        + geom_hline(yintercept=0, linetype="dashed", color="#555555", size=0.8)
+        + geom_boxplot(alpha=0.6, outlier_alpha=0, width=0.5, color="#333333")
+        + geom_jitter(width=0.15, size=2, alpha=0.8, color="#222222")
+        + scale_fill_brewer(type="qual", palette="Set2", guide=False)
+        + coord_flip()
         + labs(
-            title="Desigualdad vs dependencia salarial — municipios de Canarias 2023",
-            subtitle="Gini alto + pocos sueldos → desigualdad no salarial · líneas = medianas",
-            x="% renta bruta procedente de sueldos y salarios",
-            y="Índice de Gini",
+            title=f"Distribución de la brecha salarial por isla — Prov. S/C Tenerife ({AÑO_MAPA})",
+            subtitle="Índice > 0: Favorable a hombres · Índice < 0: Favorable a mujeres\nPuntos = Municipios",
+            x=None, y="Índice de brecha salarial ponderado",
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
         + theme(
-            figure_size=(12, 7),
+            figure_size=(10, 6),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            axis_text_y=element_text(size=11, face="bold"),
+            panel_grid_minor=element_blank(),
+            panel_grid_major_y=element_blank(),
+        )
+    )
+    out = os.path.join(get_plot_dir(), "brecha_salarial_islas.png")
+    p.save(out, width=10, height=6, dpi=150, verbose=False)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Brecha Islas]({out})")}
+    )
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G10 — Scatter: Brecha Salarial vs Renta Bruta Media (2023)
+# ══════════════════════════════════════════════════════════════════════════════
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_brecha_vs_renta(context: AssetExecutionContext) -> None:
+    from checks_p5 import inferir_isla
+    cfg_brecha = get_plot_config()["brecha_salarial"]
+    AÑO_MAPA = cfg_brecha.get("ano_mapa", 2023)
+    
+    # 1. Calcular Brecha
+    ocu  = pd.read_csv(get_processed_path(cfg_brecha["dataset_ocu"])).dropna(subset=["num_casos"])
+    dist = pd.read_csv(get_processed_path(cfg_brecha["dataset_dist"])).dropna(subset=["OBS_VALUE"])
+
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"].sum()
+        .pivot(index=["municipio", "año"], columns="sexo", values="num_casos")
+        .reset_index()
+    )
+    ocu_hm.columns.name = None
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+
+    sal = (
+        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
+        .rename(columns={"OBS_VALUE": "pct_salarios"})
+    )
+
+    brecha = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    brecha["indice_brecha"] = (brecha["ratio_hm"] - 0.5) * brecha["pct_salarios"]
+    brecha = brecha[brecha["año"] == AÑO_MAPA][["municipio", "indice_brecha"]]
+    
+    # 2. Cargar Renta Media
+    cfg_renta = get_plot_config()["renta_cajas"]
+    renta_df = pd.read_csv(get_processed_path(cfg_renta["dataset"])).dropna(subset=["OBS_VALUE"])
+    renta = (
+        renta_df[(renta_df["año"] == AÑO_MAPA) & (renta_df["MEDIDAS_CODE"] == cfg_renta["medida"])]
+        .groupby("municipio", as_index=False)["OBS_VALUE"].median()
+        .rename(columns={"OBS_VALUE": "renta_media"})
+    )
+    
+    # 3. Merge y Plot
+    df = brecha.merge(renta, on="municipio", how="inner")
+    df["isla"] = df["municipio"].apply(inferir_isla)
+    df = df[df["isla"] != "Desconocida"]
+    
+    med_r = float(df["renta_media"].median())
+    med_b = float(df["indice_brecha"].median())
+    
+    # Outliers para etiquetar
+    df["label"] = df.apply(
+        lambda r: r["municipio"] if (r["indice_brecha"] > df["indice_brecha"].quantile(0.9) or 
+                                     r["renta_media"] > df["renta_media"].quantile(0.9) or
+                                     r["indice_brecha"] < df["indice_brecha"].quantile(0.1)) else "", 
+        axis=1
+    )
+
+    p = (
+        ggplot(df, aes(x="renta_media", y="indice_brecha", color="isla"))
+        + geom_hline(yintercept=med_b, linetype="dashed", color="#BBBBBB", size=0.5)
+        + geom_vline(xintercept=med_r, linetype="dashed", color="#BBBBBB", size=0.5)
+        + geom_smooth(method="lm", color="#444444", fill="#EEEEEE", size=0.8, alpha=0.25, inherit_aes=False, mapping=aes(x="renta_media", y="indice_brecha"))
+        + geom_point(size=3.5, alpha=0.8, stroke=0.2)
+        + geom_text(aes(label="label"), size=7, nudge_y=0.15, color="#333333", ha="center")
+        + scale_color_brewer(type="qual", palette="Set2", name="Isla")
+        + labs(
+            title=f"Brecha salarial vs Nivel adquisitivo — Prov. S/C Tenerife ({AÑO_MAPA})",
+            subtitle="¿Tienen los municipios más ricos una menor brecha salarial? · Líneas = Medianas",
+            x=f"{cfg_renta['medida'].replace('_', ' ').title()} (€)",
+            y="Índice de brecha salarial ponderado",
+            caption="Fuente: ISTAC",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(11, 7),
             plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
             panel_grid_minor=element_blank(),
             legend_position="right",
         )
     )
-    out = os.path.join(get_plot_dir(), "gini_scatter_sueldos.png")
-    p.save(out, width=12, height=7, dpi=150, verbose=False)
+    out = os.path.join(get_plot_dir(), "brecha_vs_renta.png")
+    p.save(out, width=11, height=7, dpi=150, verbose=False)
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Gini Scatter]({out})")}
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# G10 — Heatmap: Gini × municipio × año — Tenerife (2015-2023)
-# ══════════════════════════════════════════════════════════════════════════════
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_gini_heatmap_tenerife(context: AssetExecutionContext) -> None:
-    from checks_p5 import MUNICIPIOS_TENERIFE
-    """
-    IDONEIDAD: 31 municipios × 9 años × 1 variable continua → el heatmap
-    es más eficiente en espacio que 31 líneas superpuestas (overplotting
-    inevitable). Complementa el mapa coroplético: el mapa responde "dónde",
-    el heatmap responde "cuándo y cómo evoluciona cada municipio".
-
-    GESTALT:
-      Similitud   — gradiente RdYlGn_r: rojo = alta desigualdad,
-                    verde = baja. El lector percibe clusters de color
-                    sin leer los valores.
-      Proximidad  — municipios ordenados por Gini 2023 descendente:
-                    los más desiguales quedan arriba, facilitando la
-                    lectura de jerarquía vertical.
-      Continuidad — lectura izquierda→derecha = avance temporal.
-
-    DISEÑO:
-      Paleta divergente centrada en la mediana del dataset.
-      Columna 2020 con borde negro fino (ancla narrativa COVID).
-      Ordenación por 2023 (estado actual = referencia del lector).
-      Sin grid (las celdas son la cuadrícula).
-    """
-    gini = _load_gini()
-    df   = gini[
-        (gini["MEDIDAS"] == "Índice de Gini") &
-        (gini["tipo_territorio"] == "municipio") &
-        (gini["TERRITORIO"].isin(MUNICIPIOS_TENERIFE))
-    ].copy()
-
-    orden = (
-        df[df["TIME_PERIOD"] == 2023]
-        .sort_values("OBS_VALUE", ascending=False)["TERRITORIO"]
-        .tolist()
-    )
-    df["TERRITORIO"] = pd.Categorical(df["TERRITORIO"],
-                                       categories=orden, ordered=True)
-    midpoint = float(df["OBS_VALUE"].median())
-
-    p = (
-        ggplot(df, aes(x="factor(TIME_PERIOD)", y="TERRITORIO",
-                       fill="OBS_VALUE"))
-        + geom_tile(color="white", size=0.35)
-        + geom_tile(data=df[df["TIME_PERIOD"] == 2020],
-                    color="#333333", size=0.8, fill=None)
-        + scale_fill_gradient2(
-            low="#1a9850", mid="#ffffbf", high="#d73027",
-            midpoint=midpoint,
-            name="Gini",
-        )
-        + labs(
-            title="Índice de Gini por municipio y año — Tenerife 2015-2023",
-            subtitle="Ordenado por desigualdad en 2023 · borde negro = 2020 (COVID)",
-            x=None, y=None,
-            caption="Fuente: ISTAC",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(13, 8),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            axis_text_x=element_text(size=9, face="bold"),
-            axis_text_y=element_text(size=8),
-            panel_grid=element_blank(),
-        )
-    )
-    out = os.path.join(get_plot_dir(), "gini_heatmap_tenerife.png")
-    p.save(out, width=13, height=8, dpi=150, verbose=False)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Gini Heatmap]({out})")}
-    )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# G11 — Líneas facet: Gini + P80/P20 por isla (doble métrica de desigualdad)
-# ══════════════════════════════════════════════════════════════════════════════
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_p8020_vs_gini_islas(context: AssetExecutionContext) -> None:
-    """
-    IDONEIDAD: el P80/P20 es más intuitivo para el lector no especializado
-    ("los del percentil 80 tienen X veces más renta que los del 20").
-    Comparar ambas métricas en el mismo panel por isla permite detectar si
-    cuentan la misma historia o si una oculta matices que la otra revela.
-    Si el Gini baja pero el P80/P20 se mantiene, la mejora es en la clase
-    media, no en los extremos.
-
-    GESTALT:
-      Continuidad — líneas temporales como codificación natural del tiempo.
-      Similitud   — dos colores distintos para cada métrica, constantes
-                    en todos los facets (el lector aprende el código una
-                    vez y lo aplica a los 8 paneles).
-      Cierre      — cada facet es una unidad perceptiva independiente
-                    (isla = contexto completo).
-
-    DISEÑO:
-      Facet por isla (8 paneles), escala Y libre por panel (las métricas
-      tienen rangos distintos: Gini ~25-40, P80/P20 ~2.0-3.9).
-      Paleta: azul (Gini) y coral (P80/P20) — semánticamente neutros
-      pero distinguibles y coherentes con la paleta general del proyecto.
-      Puntos en los nodos como anclaje visual. Grid mínimo.
-    """
-    gini = _load_gini()
-    df   = gini[gini["tipo_territorio"] == "isla"].copy()
-    df["TERRITORIO"] = pd.Categorical(
-        df["TERRITORIO"], categories=ISLAS_ORDEN, ordered=True
-    )
-    df["metrica"] = df["MEDIDAS"].replace({
-        "Índice de Gini":                    "Gini",
-        "Distribución de la renta P80/P20":  "P80/P20",
-    })
-
-    p = (
-        ggplot(df, aes(x="TIME_PERIOD", y="OBS_VALUE",
-                       color="metrica", group="metrica"))
-        + geom_vline(xintercept=2020, linetype="dotted",
-                     color="#CCCCCC", size=0.5)
-        + geom_line(size=1.1, alpha=0.9)
-        + geom_point(size=1.8, stroke=0.3)
-        + facet_wrap("~ TERRITORIO", scales="free_y", ncol=4)
-        + scale_x_continuous(breaks=[2015, 2018, 2021, 2023])
-        + scale_color_manual(
-            values={"Gini": "#457b9d", "P80/P20": "#e76f51"},
-            name="Métrica",
-        )
-        + labs(
-            title="Gini y P80/P20 por isla — Canarias 2015-2023",
-            subtitle="Escala Y libre por isla · ambas métricas deben descender si mejora la equidad",
-            x=None, y=None,
-            caption="Fuente: ISTAC",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(15, 8),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            axis_text_x=element_text(angle=45, ha="right", size=7),
-            strip_text=element_text(size=9, face="bold"),
-            panel_grid_minor=element_blank(),
-            panel_grid_major_x=element_blank(),
-            legend_position="bottom",
-        )
-    )
-    out = os.path.join(get_plot_dir(), "p8020_vs_gini_islas.png")
-    p.save(out, width=15, height=8, dpi=150, verbose=False)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![P80/20 vs Gini]({out})")}
+        {"plot": MetadataValue.md(f"![Brecha vs Renta]({out})")}
     )
