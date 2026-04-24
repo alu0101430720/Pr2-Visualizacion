@@ -12,6 +12,10 @@ from git import (
     push_branch,
 )
 
+_ISLAS      = {"Canarias", "Tenerife", "Gran Canaria", "La Palma", "La Gomera",
+               "El Hierro", "Lanzarote", "Fuerteventura"}
+_PROVINCIAS = {"Las Palmas"}
+
 @asset(group_name="ingesta")
 def extraer_repositorio_github() -> str:
     """
@@ -59,67 +63,107 @@ def ingestar_datos_p5() -> str:
 @asset(deps=[ingestar_datos_p5], group_name="preprocesado")
 def preprocesar_datos_p5() -> str:
     """
-    Asset para preprocesar los datos CSV de data-P5.
-    Limpia números, corrige nombres de lugares, y elimina columnas espurias.
-    Guarda los resultados por separado en una subcarpeta 'processed'.
+    Preprocesa CSV y TSV de data-P5. Guarda todo en processed/ como CSV.
+
+    CSV (comportamiento original sin cambios):
+      - Limpia espacios, corrige formato invertido "Gomera, La",
+        sustituye separador decimal español, elimina columnas Unnamed/vacías.
+
+    TSV — gini.tsv y rentas.tsv (lógica adicional):
+      - Elimina columnas totalmente NaN (ESTADO_OBSERVACION,
+        CONFIDENCIALIDAD_OBSERVACION no aportan información útil).
+      - Deduplica Santa Cruz de Tenerife: ISTAC incluye el municipio
+        y la provincia homónima bajo el mismo nombre. Se conserva el
+        valor MÍNIMO por (TERRITORIO, TIME_PERIOD, MEDIDAS) ya que el
+        municipio tiene siempre Gini menor que su provincia.
+      - Añade columna tipo_territorio ('isla'|'provincia'|'municipio')
+        para facilitar filtrado en los assets de plot sin repetir lógica.
+      - Guarda como .csv (sin tabulaciones) para consistencia con el
+        resto del pipeline.
     """
     logger = get_dagster_logger()
-    
-    # Usamos la ruta destino donde se copió data-P5 dentro del repositorio
-    source_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    source_dir    = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
     processed_dir = os.path.join(source_dir, "processed")
     os.makedirs(processed_dir, exist_ok=True)
-    
-    csv_files = glob.glob(os.path.join(source_dir, "*.csv"))
-    
-    for file_path in csv_files:
+
+    # ── CSV ───────────────────────────────────────────────────────────────────
+    for file_path in glob.glob(os.path.join(source_dir, "*.csv")):
         filename = os.path.basename(file_path)
-        logger.info(f"Procesando {filename}...")
+        logger.info(f"Procesando CSV: {filename}")
         try:
             df = pd.read_csv(file_path)
-            
-            # 1. Limpiar espacios en nombres de columnas
             df.columns = df.columns.str.strip()
-            
-            # Identificar columnas tipo 'object' (strings)
-            string_cols = df.select_dtypes(include=['object']).columns
-            
-            for col in string_cols:
-                # 1.a Trim espacios en blanco para limpiar la cadena completamente antes del regex
+            for col in df.select_dtypes(include=["object"]).columns:
                 try:
-                    # Usar str.strip() si es posible y reemplazar 'nan' strings a verdaderos NaN
                     mask = df[col].notna()
                     df.loc[mask, col] = df.loc[mask, col].astype(str).str.strip()
                 except Exception:
                     pass
-                
-                # 2. Formateo de lugares: INE a menudo exporta "Gomera, La" o "Palmas, Las"
-                df[col] = df[col].replace(r'(?i)^([^,]+),\s*(La|El|Los|Las)$', r'\2 \1', regex=True)
-                
-                # 3. Reemplazar formato numérico de csv español (coma por punto)
-                # Verifica si toda la celda es 'numero,numero' o '-numero,numero'
-                df[col] = df[col].replace(r'^(-?\d+),(\d+)$', r'\1.\2', regex=True)
-                
-                # Intentar conversión a numérico para poder operar mejor en Pandas
+                df[col] = df[col].replace(
+                    r"(?i)^([^,]+),\s*(La|El|Los|Las)$", r"\2 \1", regex=True
+                )
+                df[col] = df[col].replace(r"^(-?\d+),(\d+)$", r"\1.\2", regex=True)
                 try:
                     df[col] = df[col].astype(float)
                 except ValueError:
                     pass
-
-            # 4. Eliminar columnas espurias
-            # Generalmente son 'Unnamed' creadas al final de líneas mal formadas o columnas totalmente vacias
-            cols_to_drop = [c for c in df.columns if 'Unnamed' in str(c)]
-            df = df.drop(columns=cols_to_drop, errors='ignore')
-            df = df.dropna(how='all', axis=1) # Limpiar columnas vacías
-            
-            # Guardar el dataset limpio
-            out_path = os.path.join(processed_dir, filename)
-            df.to_csv(out_path, index=False)
-            logger.info(f"Procesamiento exitoso y guardado en: {out_path}")
-            
+            df = df.drop(columns=[c for c in df.columns if "Unnamed" in str(c)],
+                         errors="ignore")
+            df = df.dropna(how="all", axis=1)
+            df.to_csv(os.path.join(processed_dir, filename), index=False)
+            logger.info(f"  ✓ {filename}")
         except Exception as e:
-            logger.error(f"Error procesando el archivo {filename}: {str(e)}")
-            
+            logger.error(f"  ✗ {filename}: {e}")
+
+    # ── TSV ───────────────────────────────────────────────────────────────────
+    for file_path in glob.glob(os.path.join(source_dir, "*.tsv")):
+        filename = os.path.basename(file_path)
+        logger.info(f"Procesando TSV: {filename}")
+        try:
+            df = pd.read_csv(file_path, sep="\t")
+            df.columns = df.columns.str.strip()
+
+            # 1. Eliminar columnas totalmente NaN
+            df = df.dropna(how="all", axis=1)
+
+            # 2. Limpiar espacios en strings
+            for col in df.select_dtypes(include=["object"]).columns:
+                mask = df[col].notna()
+                df.loc[mask, col] = df.loc[mask, col].astype(str).str.strip()
+
+            # 3. Corregir formato invertido en TERRITORIO
+            if "TERRITORIO" in df.columns:
+                df["TERRITORIO"] = df["TERRITORIO"].replace(
+                    r"(?i)^([^,]+),\s*(La|El|Los|Las)$", r"\2 \1", regex=True
+                )
+
+            # 4. Deduplicar SC Tenerife (municipio vs provincia):
+            #    keep='first' tras sort ascendente → valor más bajo = municipio
+            if "OBS_VALUE" in df.columns:
+                df = (
+                    df.sort_values("OBS_VALUE")
+                      .drop_duplicates(
+                          subset=["TERRITORIO", "TIME_PERIOD", "MEDIDAS"],
+                          keep="first",
+                      )
+                      .reset_index(drop=True)
+                )
+
+            # 5. Etiquetar tipo de territorio
+            if "TERRITORIO" in df.columns:
+                def _tipo(t):
+                    if t in _ISLAS:      return "isla"
+                    if t in _PROVINCIAS: return "provincia"
+                    return "municipio"
+                df["tipo_territorio"] = df["TERRITORIO"].apply(_tipo)
+
+            # 6. Guardar como CSV
+            out_name = filename.replace(".tsv", ".csv")
+            df.to_csv(os.path.join(processed_dir, out_name), index=False)
+            logger.info(f"  ✓ {out_name} ({len(df)} filas)")
+        except Exception as e:
+            logger.error(f"  ✗ {filename}: {e}")
+
     return processed_dir
 
 @asset(
@@ -133,6 +177,10 @@ def preprocesar_datos_p5() -> str:
         "plot_brecha_salarial",
         "plot_mapa_brecha_salarial",
         "plot_renta_violin",
+        "plot_gini_evolucion_islas",
+        "plot_gini_scatter_sueldos",
+        "plot_gini_heatmap_tenerife",
+        "plot_p8020_vs_gini_islas",
     ],
     group_name="publicacion",
     description=(

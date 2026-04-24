@@ -1,4 +1,6 @@
 import os
+import numpy as np
+from checks_p5 import MUNICIPIOS_TENERIFE, inferir_isla
 import yaml
 import pandas as pd
 import geopandas as gpd
@@ -590,4 +592,335 @@ def plot_renta_violin(context: AssetExecutionContext) -> None:
     p.save(out_path, width=12, height=6, dpi=150, verbose=False)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Renta Violin]({out_path})")}
+    )
+# ── Constantes compartidas ────────────────────────────────────────────────────
+ISLAS_ORDEN = [
+    "Canarias", "Tenerife", "Gran Canaria", "La Palma",
+    "La Gomera", "El Hierro", "Lanzarote", "Fuerteventura",
+]
+
+# Municipios de Tenerife (reutilizados de checks_p5)
+
+
+
+def _load_gini() -> pd.DataFrame:
+    return pd.read_csv(get_processed_path("gini.csv")).dropna(subset=["OBS_VALUE"])
+
+
+def _load_rentas() -> pd.DataFrame:
+    return pd.read_csv(get_processed_path("rentas.csv")).dropna(subset=["OBS_VALUE"])
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G8 — Líneas: evolución del Índice de Gini por isla (2015-2023)
+# ══════════════════════════════════════════════════════════════════════════════
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
+    """
+    IDONEIDAD: 9 años × 8 territorios agregados → la línea es la codificación
+    natural del tiempo. Responde "¿en qué isla baja más la desigualdad y a qué
+    ritmo?". Un bar chart no permitiría ver la tendencia; un scatter perdería
+    la conexión temporal.
+
+    GESTALT:
+      Continuidad — la línea implica tendencia entre años consecutivos.
+      Similitud   — color constante por isla a lo largo de los 9 años.
+      Figura/Fondo — Canarias en gris discontinuo actúa como fondo de
+                     referencia; las islas son la figura.
+
+    DISEÑO:
+      Canarias como referencia gris (no compite con las islas).
+      Anotación vertical en 2020 (COVID) como ancla narrativa clave.
+      Eje X con todos los años, grid solo horizontal, escala Y libre.
+      Paleta Set2 (9 colores max — 7 islas encajan sin superar el límite).
+    """
+    gini = _load_gini()
+    df   = gini[(gini["MEDIDAS"] == "Índice de Gini") &
+                (gini["tipo_territorio"] == "isla")].copy()
+    df["TERRITORIO"] = pd.Categorical(
+        df["TERRITORIO"], categories=ISLAS_ORDEN, ordered=True
+    )
+
+    canarias  = df[df["TERRITORIO"] == "Canarias"]
+    islas_sin = df[df["TERRITORIO"] != "Canarias"]
+
+    p = (
+        ggplot(islas_sin,
+               aes(x="TIME_PERIOD", y="OBS_VALUE",
+                   color="TERRITORIO", group="TERRITORIO"))
+        + geom_line(data=canarias,
+                    mapping=aes(x="TIME_PERIOD", y="OBS_VALUE"),
+                    color="#CCCCCC", size=1.3, linetype="dashed",
+                    inherit_aes=False)
+        + geom_vline(xintercept=2020, linetype="dotted",
+                     color="#AAAAAA", size=0.6)
+        + annotate("text", x=2020.2, y=df["OBS_VALUE"].max() - 0.3,
+                   label="2020\nCOVID", size=7, color="#999999", ha="left")
+        + geom_line(size=1.1, alpha=0.9)
+        + geom_point(size=2.2, stroke=0.3)
+        + scale_x_continuous(breaks=list(range(2015, 2024)))
+        + scale_color_brewer(type="qual", palette="Set2", name="Isla")
+        + labs(
+            title="Evolución del Índice de Gini por isla — Canarias 2015-2023",
+            subtitle="Línea gris = Canarias agregado · valores altos = mayor desigualdad",
+            x=None, y="Índice de Gini",
+            caption="Fuente: ISTAC",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(13, 6),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            axis_text_x=element_text(angle=45, ha="right", size=8),
+            panel_grid_minor=element_blank(),
+            panel_grid_major_x=element_blank(),
+            legend_position="right",
+        )
+    )
+    out = os.path.join(get_plot_dir(), "gini_evolucion_islas.png")
+    p.save(out, width=13, height=6, dpi=150, verbose=False)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Gini Islas]({out})")}
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G9 — Scatter: Gini vs % sueldos/salarios por municipio (2023)
+# ══════════════════════════════════════════════════════════════════════════════
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_gini_scatter_sueldos(context: AssetExecutionContext) -> None:
+    """
+    IDONEIDAD: dos variables continuas × 88 municipios → el scatter es la
+    geometría canónica. Responde la pregunta central del Acto final del
+    storytelling: "¿los municipios más desiguales dependen menos de sueldos?"
+    Si la correlación es negativa, la desigualdad proviene de otras fuentes
+    (pensiones concentradas, otros ingresos), no del mercado laboral.
+
+    GESTALT:
+      Similitud   — color por isla agrupa municipios por territorio.
+      Proximidad  — clusters insulares emergen sin intervención explícita.
+      Figura/Fondo — outliers alejados de la tendencia lineal destacan
+                     sobre la nube central (etiquetados selectivamente).
+
+    DISEÑO:
+      Líneas de referencia en medianas (cuadrantes narrativos).
+      Tendencia OLS global en gris neutro (no compite con los puntos).
+      Etiquetas solo para municipios con residuo > 1.8σ de la recta
+      (outliers con historia que contar).
+      Alpha 0.75 para revelar densidad donde se solapan puntos.
+    """
+    gini   = _load_gini()
+    rentas = _load_rentas()
+
+    gini_2023 = (
+        gini[(gini["MEDIDAS"] == "Índice de Gini") &
+             (gini["TIME_PERIOD"] == 2023) &
+             (gini["tipo_territorio"] == "municipio")]
+        [["TERRITORIO", "OBS_VALUE"]].rename(columns={"OBS_VALUE": "gini"})
+    )
+    sal_2023 = (
+        rentas[(rentas["MEDIDAS"] == "Sueldos y salarios") &
+               (rentas["TIME_PERIOD"] == 2023) &
+               (rentas["tipo_territorio"] == "municipio")]
+        [["TERRITORIO", "OBS_VALUE"]].rename(columns={"OBS_VALUE": "pct_sueldos"})
+    )
+    df = gini_2023.merge(sal_2023, on="TERRITORIO")
+    df["isla"] = df["TERRITORIO"].apply(inferir_isla)
+
+    # Outliers por residuo de la recta OLS
+    coef        = np.polyfit(df["pct_sueldos"], df["gini"], 1)
+    df["resid"] = df["gini"] - (coef[0] * df["pct_sueldos"] + coef[1])
+    umbral      = df["resid"].std() * 1.8
+    df["label"] = df.apply(
+        lambda r: r["TERRITORIO"] if abs(r["resid"]) > umbral else "", axis=1
+    )
+
+    med_g = float(df["gini"].median())
+    med_s = float(df["pct_sueldos"].median())
+
+    p = (
+        ggplot(df, aes(x="pct_sueldos", y="gini", color="isla"))
+        + geom_hline(yintercept=med_g, linetype="dashed",
+                     color="#BBBBBB", size=0.5)
+        + geom_vline(xintercept=med_s, linetype="dashed",
+                     color="#BBBBBB", size=0.5)
+        + geom_smooth(method="lm", color="#444444", fill="#EEEEEE",
+                      size=0.8, alpha=0.25, inherit_aes=False,
+                      mapping=aes(x="pct_sueldos", y="gini"))
+        + geom_point(size=2.8, alpha=0.75, stroke=0.2)
+        + geom_text(aes(label="label"), size=7, nudge_y=0.3,
+                    color="#333333", ha="center")
+        + scale_color_brewer(type="qual", palette="Set2", name="Isla")
+        + labs(
+            title="Desigualdad vs dependencia salarial — municipios de Canarias 2023",
+            subtitle="Gini alto + pocos sueldos → desigualdad no salarial · líneas = medianas",
+            x="% renta bruta procedente de sueldos y salarios",
+            y="Índice de Gini",
+            caption="Fuente: ISTAC",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(12, 7),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            panel_grid_minor=element_blank(),
+            legend_position="right",
+        )
+    )
+    out = os.path.join(get_plot_dir(), "gini_scatter_sueldos.png")
+    p.save(out, width=12, height=7, dpi=150, verbose=False)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Gini Scatter]({out})")}
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G10 — Heatmap: Gini × municipio × año — Tenerife (2015-2023)
+# ══════════════════════════════════════════════════════════════════════════════
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_gini_heatmap_tenerife(context: AssetExecutionContext) -> None:
+    """
+    IDONEIDAD: 31 municipios × 9 años × 1 variable continua → el heatmap
+    es más eficiente en espacio que 31 líneas superpuestas (overplotting
+    inevitable). Complementa el mapa coroplético: el mapa responde "dónde",
+    el heatmap responde "cuándo y cómo evoluciona cada municipio".
+
+    GESTALT:
+      Similitud   — gradiente RdYlGn_r: rojo = alta desigualdad,
+                    verde = baja. El lector percibe clusters de color
+                    sin leer los valores.
+      Proximidad  — municipios ordenados por Gini 2023 descendente:
+                    los más desiguales quedan arriba, facilitando la
+                    lectura de jerarquía vertical.
+      Continuidad — lectura izquierda→derecha = avance temporal.
+
+    DISEÑO:
+      Paleta divergente centrada en la mediana del dataset.
+      Columna 2020 con borde negro fino (ancla narrativa COVID).
+      Ordenación por 2023 (estado actual = referencia del lector).
+      Sin grid (las celdas son la cuadrícula).
+    """
+    gini = _load_gini()
+    df   = gini[
+        (gini["MEDIDAS"] == "Índice de Gini") &
+        (gini["tipo_territorio"] == "municipio") &
+        (gini["TERRITORIO"].isin(MUNICIPIOS_TENERIFE))
+    ].copy()
+
+    orden = (
+        df[df["TIME_PERIOD"] == 2023]
+        .sort_values("OBS_VALUE", ascending=False)["TERRITORIO"]
+        .tolist()
+    )
+    df["TERRITORIO"] = pd.Categorical(df["TERRITORIO"],
+                                       categories=orden, ordered=True)
+    midpoint = float(df["OBS_VALUE"].median())
+
+    p = (
+        ggplot(df, aes(x="factor(TIME_PERIOD)", y="TERRITORIO",
+                       fill="OBS_VALUE"))
+        + geom_tile(color="white", size=0.35)
+        + geom_tile(data=df[df["TIME_PERIOD"] == 2020],
+                    color="#333333", size=0.8, fill=None)
+        + scale_fill_gradient2(
+            low="#1a9850", mid="#ffffbf", high="#d73027",
+            midpoint=midpoint,
+            name="Gini",
+        )
+        + labs(
+            title="Índice de Gini por municipio y año — Tenerife 2015-2023",
+            subtitle="Ordenado por desigualdad en 2023 · borde negro = 2020 (COVID)",
+            x=None, y=None,
+            caption="Fuente: ISTAC",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(13, 8),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            axis_text_x=element_text(size=9, face="bold"),
+            axis_text_y=element_text(size=8),
+            panel_grid=element_blank(),
+        )
+    )
+    out = os.path.join(get_plot_dir(), "gini_heatmap_tenerife.png")
+    p.save(out, width=13, height=8, dpi=150, verbose=False)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Gini Heatmap]({out})")}
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# G11 — Líneas facet: Gini + P80/P20 por isla (doble métrica de desigualdad)
+# ══════════════════════════════════════════════════════════════════════════════
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_p8020_vs_gini_islas(context: AssetExecutionContext) -> None:
+    """
+    IDONEIDAD: el P80/P20 es más intuitivo para el lector no especializado
+    ("los del percentil 80 tienen X veces más renta que los del 20").
+    Comparar ambas métricas en el mismo panel por isla permite detectar si
+    cuentan la misma historia o si una oculta matices que la otra revela.
+    Si el Gini baja pero el P80/P20 se mantiene, la mejora es en la clase
+    media, no en los extremos.
+
+    GESTALT:
+      Continuidad — líneas temporales como codificación natural del tiempo.
+      Similitud   — dos colores distintos para cada métrica, constantes
+                    en todos los facets (el lector aprende el código una
+                    vez y lo aplica a los 8 paneles).
+      Cierre      — cada facet es una unidad perceptiva independiente
+                    (isla = contexto completo).
+
+    DISEÑO:
+      Facet por isla (8 paneles), escala Y libre por panel (las métricas
+      tienen rangos distintos: Gini ~25-40, P80/P20 ~2.0-3.9).
+      Paleta: azul (Gini) y coral (P80/P20) — semánticamente neutros
+      pero distinguibles y coherentes con la paleta general del proyecto.
+      Puntos en los nodos como anclaje visual. Grid mínimo.
+    """
+    gini = _load_gini()
+    df   = gini[gini["tipo_territorio"] == "isla"].copy()
+    df["TERRITORIO"] = pd.Categorical(
+        df["TERRITORIO"], categories=ISLAS_ORDEN, ordered=True
+    )
+    df["metrica"] = df["MEDIDAS"].replace({
+        "Índice de Gini":                    "Gini",
+        "Distribución de la renta P80/P20":  "P80/P20",
+    })
+
+    p = (
+        ggplot(df, aes(x="TIME_PERIOD", y="OBS_VALUE",
+                       color="metrica", group="metrica"))
+        + geom_vline(xintercept=2020, linetype="dotted",
+                     color="#CCCCCC", size=0.5)
+        + geom_line(size=1.1, alpha=0.9)
+        + geom_point(size=1.8, stroke=0.3)
+        + facet_wrap("~ TERRITORIO", scales="free_y", ncol=4)
+        + scale_x_continuous(breaks=[2015, 2018, 2021, 2023])
+        + scale_color_manual(
+            values={"Gini": "#457b9d", "P80/P20": "#e76f51"},
+            name="Métrica",
+        )
+        + labs(
+            title="Gini y P80/P20 por isla — Canarias 2015-2023",
+            subtitle="Escala Y libre por isla · ambas métricas deben descender si mejora la equidad",
+            x=None, y=None,
+            caption="Fuente: ISTAC",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(15, 8),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            axis_text_x=element_text(angle=45, ha="right", size=7),
+            strip_text=element_text(size=9, face="bold"),
+            panel_grid_minor=element_blank(),
+            panel_grid_major_x=element_blank(),
+            legend_position="bottom",
+        )
+    )
+    out = os.path.join(get_plot_dir(), "p8020_vs_gini_islas.png")
+    p.save(out, width=15, height=8, dpi=150, verbose=False)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![P80/20 vs Gini]({out})")}
     )

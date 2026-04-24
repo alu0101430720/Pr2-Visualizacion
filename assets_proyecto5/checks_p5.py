@@ -19,6 +19,13 @@ from plots_assets import (
     get_geojson_path,
     get_plot_config,
     get_plot_dir,
+    plot_gini_evolucion_islas,
+    plot_gini_scatter_sueldos,
+    plot_gini_heatmap_tenerife,
+    plot_p8020_vs_gini_islas,
+    _load_gini,
+    _load_rentas,
+    ISLAS_ORDEN,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1134,4 +1141,491 @@ def check_output_plots(context):
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Output_Plots": MetadataValue.md(report_md)},
+    )
+# ── Constantes ────────────────────────────────────────────────────────────────
+AÑOS_GINI        = set(range(2015, 2024))
+AÑOS_COMUNES     = {2021, 2022, 2023}
+ISLAS            = set(ISLAS_ORDEN)
+PROVINCIAS       = {"Las Palmas"}
+MEDIDAS_GINI     = {"Índice de Gini", "Distribución de la renta P80/P20"}
+MEDIDAS_RENTAS   = {
+    "Sueldos y salarios", "Pensiones", "Prestaciones por desempleo",
+    "Otras prestaciones", "Otros ingresos",
+}
+N_MUNICIPIOS_CAN = 88
+MIN_KB           = 50
+MAX_AGE_MIN      = 30
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOQUE 1 — CHECKS DE PREPROCESADO
+# ══════════════════════════════════════════════════════════════════════════════
+
+@asset_check(
+    asset=preprocesar_datos_p5,
+    description="Verifica que gini.csv y rentas.csv existen en processed/ tras el preprocesado.",
+)
+def check_tsv_procesados(context, preprocesar_datos_p5: str):
+    """
+    Gestalt — Veracidad Visual: si los TSV no se procesaron correctamente
+    los plots de desigualdad generarían gráficos vacíos o con error silencioso.
+    Este check lo detecta antes de que se ejecute ningún asset de plot.
+    """
+    passed = True
+    report_md = "### TSV procesados como CSV\n\n| Fichero | Existe | Filas |\n|---------|--------|-------|\n"
+
+    for fname in ("gini.csv", "rentas.csv"):
+        fpath = os.path.join(preprocesar_datos_p5, fname)
+        existe = os.path.exists(fpath)
+        if existe:
+            n = len(pd.read_csv(fpath))
+            report_md += f"| `{fname}` | 🟢 | {n} |\n"
+        else:
+            passed = False
+            report_md += f"| `{fname}` | 🔴 No encontrado | — |\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"TSV_Procesados": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=preprocesar_datos_p5,
+    description="Verifica que la deduplicación de Santa Cruz de Tenerife funcionó correctamente.",
+)
+def check_dedup_santa_cruz(context, preprocesar_datos_p5: str):
+    """
+    Gestalt — Similitud: si SC Tenerife aparece duplicada, su barra en el
+    heatmap y su punto en el scatter tendrían doble peso visual respecto al
+    resto de municipios, rompiendo la lectura comparativa.
+    """
+    fpath = os.path.join(preprocesar_datos_p5, "gini.csv")
+    if not os.path.exists(fpath):
+        return AssetCheckResult(passed=True, description="gini.csv no presente, check omitido.")
+
+    df   = pd.read_csv(fpath)
+    dups = df.groupby(["TERRITORIO", "TIME_PERIOD", "MEDIDAS"]).size()
+    dups = dups[dups > 1]
+    passed = len(dups) == 0
+
+    report_md = "### Deduplicación Santa Cruz de Tenerife\n\n"
+    if passed:
+        report_md += "🟢 Sin duplicados en ningún (TERRITORIO, TIME_PERIOD, MEDIDAS).\n"
+    else:
+        report_md += f"🔴 {len(dups)} combinaciones duplicadas:\n\n"
+        report_md += dups.reset_index().to_markdown(index=False)
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Dedup_SC": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=preprocesar_datos_p5,
+    description="Verifica que tipo_territorio se asignó correctamente en gini.csv y rentas.csv.",
+)
+def check_tipo_territorio(context, preprocesar_datos_p5: str):
+    """
+    Gestalt — Similitud: los plots filtran por tipo_territorio para separar
+    islas de municipios. Si la columna falta o tiene valores erróneos, los
+    plots mezclan islas y municipios en el mismo gráfico, rompiendo la
+    coherencia visual entre series.
+    """
+    passed = True
+    report_md = "### Columna tipo_territorio\n\n| Fichero | isla | provincia | municipio | Desconocidos |\n|---------|------|-----------|-----------|-------------|\n"
+
+    for fname in ("gini.csv", "rentas.csv"):
+        fpath = os.path.join(preprocesar_datos_p5, fname)
+        if not os.path.exists(fpath):
+            continue
+        df = pd.read_csv(fpath)
+        if "tipo_territorio" not in df.columns:
+            passed = False
+            report_md += f"| `{fname}` | 🔴 columna ausente | — | — | — |\n"
+            continue
+        vc = df["tipo_territorio"].value_counts().to_dict()
+        desconocidos = df[~df["tipo_territorio"].isin({"isla","provincia","municipio"})]
+        ok = len(desconocidos) == 0
+        passed = passed and ok
+        report_md += (
+            f"| `{fname}` "
+            f"| {vc.get('isla', 0)} "
+            f"| {vc.get('provincia', 0)} "
+            f"| {vc.get('municipio', 0)} "
+            f"| {'🟢 0' if ok else f'🔴 {len(desconocidos)}'} |\n"
+        )
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Tipo_Territorio": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=preprocesar_datos_p5,
+    description="Verifica cobertura temporal completa (2015-2023) y 88 municipios en gini.csv.",
+)
+def check_cobertura_gini(context, preprocesar_datos_p5: str):
+    """
+    Gestalt — Continuidad: si falta un año intermedio en el Gini, la línea
+    une puntos no consecutivos creando una pendiente artificial.
+    Cierre: si faltan municipios, el heatmap de Tenerife o el scatter
+    de Canarias presentan un territorio incompleto.
+    """
+    fpath = os.path.join(preprocesar_datos_p5, "gini.csv")
+    if not os.path.exists(fpath):
+        return AssetCheckResult(passed=True, description="gini.csv no presente, check omitido.")
+
+    df     = pd.read_csv(fpath)
+    passed = True
+    report_md = "### Cobertura temporal y territorial — gini.csv\n\n"
+
+    # Años completos para islas
+    años_islas = set(
+        df[df["tipo_territorio"] == "isla"]["TIME_PERIOD"].dropna().unique()
+    )
+    ok = AÑOS_GINI.issubset(años_islas)
+    passed = passed and ok
+    report_md += f"- Años 2015-2023 en islas: {'🟢' if ok else '🔴'} ({sorted(años_islas)})\n"
+
+    # Municipios canarios
+    n_mun = df[df["tipo_territorio"] == "municipio"]["TERRITORIO"].nunique()
+    ok    = n_mun == N_MUNICIPIOS_CAN
+    passed = passed and ok
+    report_md += f"- Municipios únicos: {'🟢' if ok else '🔴'} {n_mun} (esperados: {N_MUNICIPIOS_CAN})\n"
+
+    # Medidas completas
+    medidas = set(df["MEDIDAS"].dropna().unique())
+    ok = MEDIDAS_GINI.issubset(medidas)
+    passed = passed and ok
+    report_md += f"- Medidas completas {MEDIDAS_GINI}: {'🟢' if ok else '🔴'} ({medidas})\n"
+
+    # Rango de Gini coherente [20, 45]
+    v_min, v_max = float(df["OBS_VALUE"].min()), float(df["OBS_VALUE"].max())
+    ok = (v_min >= 20) and (v_max <= 45)
+    passed = passed and ok
+    report_md += f"- Rango OBS_VALUE ∈ [20, 45]: {'🟢' if ok else '🔴'} [{v_min:.1f}, {v_max:.1f}]\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Cobertura_Gini": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=preprocesar_datos_p5,
+    description="Verifica cobertura y rangos de rentas.csv (distribución renta bruta por fuente).",
+)
+def check_cobertura_rentas(context, preprocesar_datos_p5: str):
+    """
+    Gestalt — Similitud: sin las 5 fuentes de ingresos la paleta del scatter
+    no puede asignar un color por fuente. Figura/Fondo: porcentajes fuera
+    de [0,100] distorsionan el eje X del scatter Gini vs sueldos.
+    """
+    fpath = os.path.join(preprocesar_datos_p5, "rentas.csv")
+    if not os.path.exists(fpath):
+        return AssetCheckResult(passed=True, description="rentas.csv no presente, check omitido.")
+
+    df     = pd.read_csv(fpath)
+    passed = True
+    report_md = "### Cobertura y rangos — rentas.csv\n\n"
+
+    # Medidas completas
+    medidas = set(df["MEDIDAS"].dropna().unique())
+    ok = MEDIDAS_RENTAS.issubset(medidas)
+    passed = passed and ok
+    report_md += f"- Fuentes de ingreso completas: {'🟢' if ok else '🔴'} (faltan: {MEDIDAS_RENTAS - medidas or '–'})\n"
+
+    # Rango porcentual [0, 100]
+    fuera = int(((df["OBS_VALUE"] < 0) | (df["OBS_VALUE"] > 100)).sum())
+    ok    = fuera == 0
+    passed = passed and ok
+    report_md += f"- OBS_VALUE ∈ [0, 100]: {'🟢' if ok else '🔴'} ({fuera} fuera de rango)\n"
+
+    # Municipios canarios
+    n_mun = df[df["tipo_territorio"] == "municipio"]["TERRITORIO"].nunique()
+    ok    = n_mun == N_MUNICIPIOS_CAN
+    passed = passed and ok
+    report_md += f"- Municipios únicos: {'🟢' if ok else '🔴'} {n_mun} (esperados: {N_MUNICIPIOS_CAN})\n"
+
+    # Años comunes con datasets anteriores
+    años = set(df["TIME_PERIOD"].dropna().unique())
+    ok   = AÑOS_COMUNES.issubset(años)
+    passed = passed and ok
+    report_md += f"- Años 2021-2023 presentes: {'🟢' if ok else '🔴'} ({sorted(años)})\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Cobertura_Rentas": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=preprocesar_datos_p5,
+    description="Verifica consistencia de nombres de municipio entre gini.csv, rentas.csv y los datasets anteriores.",
+)
+def check_consistencia_municipios_gini(context, preprocesar_datos_p5: str):
+    """
+    Gestalt — Similitud: municipios con grafías distintas entre datasets
+    producirían puntos huérfanos en el scatter Gini × sueldos, ya que el
+    merge inner entre gini.csv y rentas.csv perdería filas silenciosamente.
+    Mismo problema al cruzar con los datasets anteriores.
+    """
+    MIN_COB = 0.90
+    pares = [
+        ("gini.csv",   "rentas.csv"),
+        ("gini.csv",   "distribucion-renta-ingresos.csv"),
+        ("rentas.csv", "ocupacion-sc-3.csv"),
+    ]
+    passed = True
+    report_md = "### Consistencia municipios entre datasets\n\n| Par | Mun. A | Mun. B | Intersección | Cobertura |\n|-----|--------|--------|-------------|----------|\n"
+
+    for fa, fb in pares:
+        pfa = os.path.join(preprocesar_datos_p5, fa)
+        pfb = os.path.join(preprocesar_datos_p5, fb)
+        if not os.path.exists(pfa) or not os.path.exists(pfb):
+            continue
+
+        col_a = "TERRITORIO" if "TERRITORIO" in pd.read_csv(pfa, nrows=1).columns else "municipio"
+        col_b = "TERRITORIO" if "TERRITORIO" in pd.read_csv(pfb, nrows=1).columns else "municipio"
+
+        mun_a = set(pd.read_csv(pfa)[col_a].dropna().unique())
+        mun_b = set(pd.read_csv(pfb)[col_b].dropna().unique())
+
+        # Excluir islas y provincias de la comparación
+        excluir = ISLAS | PROVINCIAS
+        mun_a   = {m for m in mun_a if m not in excluir}
+        mun_b   = {m for m in mun_b if m not in excluir}
+
+        inter = mun_a & mun_b
+        cob   = len(inter) / len(mun_a) if mun_a else 0
+        ok    = cob >= MIN_COB
+        passed = passed and ok
+        report_md += f"| `{fa}` × `{fb}` | {len(mun_a)} | {len(mun_b)} | {len(inter)} | {'🟢' if ok else '🔴'} {cob:.0%} |\n"
+        sin_match = mun_a - mun_b
+        if sin_match:
+            report_md += f"|  | Sin match: | `{'`, `'.join(sorted(sin_match)[:8])}`{'…' if len(sin_match)>8 else ''} |  |  |\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Consistencia_Gini": MetadataValue.md(report_md)},
+    )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOQUE 2 — CHECKS DE PLOTS
+# ══════════════════════════════════════════════════════════════════════════════
+
+@asset_check(
+    asset=plot_gini_evolucion_islas,
+    description="Precondiciones para plot_gini_evolucion_islas.",
+)
+def check_datos_gini_evolucion(context):
+    """
+    Gestalt — Continuidad: sin los 9 años completos para todas las islas,
+    la línea une puntos no consecutivos generando pendientes falsas.
+    Similitud: sin Canarias como referencia, el lector no puede calibrar
+    si una isla está por encima o debajo del agregado regional.
+    """
+    df     = _load_gini()
+    passed = True
+    report_md = "### Precondiciones: gini_evolucion_islas\n\n"
+
+    islas_data = df[(df["MEDIDAS"] == "Índice de Gini") &
+                    (df["tipo_territorio"] == "isla")]
+
+    # Todas las islas + Canarias presentes
+    islas_presentes = set(islas_data["TERRITORIO"].unique())
+    faltantes       = set(ISLAS_ORDEN) - islas_presentes
+    ok = len(faltantes) == 0
+    passed = passed and ok
+    report_md += f"- Todos los territorios presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
+
+    # 9 años completos para cada isla
+    por_isla = islas_data.groupby("TERRITORIO")["TIME_PERIOD"].nunique()
+    incompletas = por_isla[por_isla < 9].index.tolist()
+    ok = len(incompletas) == 0
+    passed = passed and ok
+    report_md += f"- 9 años completos por isla: {'🟢' if ok else '🔴'} (incompletas: {incompletas or '–'})\n"
+
+    # Sin saltos temporales
+    for isla, grupo in islas_data.groupby("TERRITORIO"):
+        años = sorted(grupo["TIME_PERIOD"].unique())
+        if len(años) > 1:
+            saltos = [años[i+1]-años[i] for i in range(len(años)-1)]
+            if any(s > 1 for s in saltos):
+                passed = False
+                report_md += f"- Salto temporal en `{isla}`: 🔴 {años}\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_Gini_Evolucion": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=plot_gini_scatter_sueldos,
+    description="Precondiciones para plot_gini_scatter_sueldos.",
+)
+def check_datos_gini_scatter(context):
+    """
+    Gestalt — Proximidad: el scatter cruza gini.csv con rentas.csv por
+    municipio y año. Si la intersección es < 80 municipios, la nube de puntos
+    pierde representatividad y los clusters insulares no emergen con claridad.
+    Figura/Fondo: outliers calculados por residuo OLS — verificar que la
+    varianza del Gini es suficiente para que la recta tenga sentido.
+    """
+    gini   = _load_gini()
+    rentas = _load_rentas()
+    passed = True
+    report_md = "### Precondiciones: gini_scatter_sueldos (2023)\n\n"
+
+    # Datos 2023 de ambos datasets
+    g23 = gini[(gini["MEDIDAS"] == "Índice de Gini") &
+               (gini["TIME_PERIOD"] == 2023) &
+               (gini["tipo_territorio"] == "municipio")]
+    r23 = rentas[(rentas["MEDIDAS"] == "Sueldos y salarios") &
+                 (rentas["TIME_PERIOD"] == 2023) &
+                 (rentas["tipo_territorio"] == "municipio")]
+
+    ok = len(g23) > 0 and len(r23) > 0
+    passed = passed and ok
+    report_md += f"- Datos 2023 presentes: {'🟢' if ok else '🔴'} (gini={len(g23)}, rentas={len(r23)})\n"
+
+    # Intersección suficiente
+    merged = g23.merge(r23, on="TERRITORIO")
+    n_join = len(merged)
+    ok     = n_join >= 80
+    passed = passed and ok
+    report_md += f"- Municipios en el join ≥ 80: {'🟢' if ok else '🔴'} ({n_join})\n"
+
+    # Varianza del Gini suficiente para una regresión con sentido
+    if n_join > 0:
+        std_gini = float(merged["OBS_VALUE_x"].std())
+        ok = std_gini > 1.0
+        passed = passed and ok
+        report_md += f"- Varianza Gini (std > 1): {'🟢' if ok else '🔴'} (std={std_gini:.2f})\n"
+
+    # Rango de sueldos coherente [0, 100]
+    fuera = int(((r23["OBS_VALUE"] < 0) | (r23["OBS_VALUE"] > 100)).sum())
+    ok    = fuera == 0
+    passed = passed and ok
+    report_md += f"- % sueldos ∈ [0,100]: {'🟢' if ok else '🔴'} ({fuera} fuera)\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_Gini_Scatter": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=plot_gini_heatmap_tenerife,
+    description="Precondiciones para plot_gini_heatmap_tenerife.",
+)
+def check_datos_gini_heatmap(context):
+    """
+    Gestalt — Similitud: el gradiente de color del heatmap solo es
+    interpretable si hay variación real en el Gini entre municipios. Con
+    un rango < 3 puntos el gradiente es visualmente plano (toda la paleta
+    comprimida en una franja estrecha).
+    Proximidad: la ordenación por Gini 2023 requiere que ese año esté
+    completo para todos los municipios de Tenerife.
+    """
+    df     = _load_gini()
+    passed = True
+    report_md = "### Precondiciones: gini_heatmap_tenerife\n\n"
+
+    tf = df[(df["MEDIDAS"] == "Índice de Gini") &
+            (df["tipo_territorio"] == "municipio") &
+            (df["TERRITORIO"].isin(MUNICIPIOS_TENERIFE))]
+
+    # Municipios de Tenerife con datos
+    n_mun = tf["TERRITORIO"].nunique()
+    ok    = n_mun >= 25
+    passed = passed and ok
+    report_md += f"- Municipios Tenerife ≥ 25: {'🟢' if ok else '🔴'} ({n_mun})\n"
+
+    # Año 2023 completo (necesario para la ordenación)
+    n_2023 = tf[tf["TIME_PERIOD"] == 2023]["TERRITORIO"].nunique()
+    ok     = n_2023 >= 25
+    passed = passed and ok
+    report_md += f"- Municipios con dato en 2023 ≥ 25: {'🟢' if ok else '🔴'} ({n_2023})\n"
+
+    # Variación suficiente para que el gradiente sea informativo
+    rango = float(tf["OBS_VALUE"].max() - tf["OBS_VALUE"].min())
+    ok    = rango >= 3.0
+    passed = passed and ok
+    report_md += f"- Rango Gini ≥ 3 puntos (gradiente visible): {'🟢' if ok else '🔴'} ({rango:.1f})\n"
+
+    # 9 años en el dataset (columnas del heatmap)
+    años = tf["TIME_PERIOD"].nunique()
+    ok   = años == 9
+    passed = passed and ok
+    report_md += f"- 9 años de datos: {'🟢' if ok else '🔴'} ({años})\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_Gini_Heatmap": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=plot_p8020_vs_gini_islas,
+    description="Precondiciones para plot_p8020_vs_gini_islas.",
+)
+def check_datos_p8020(context):
+    """
+    Gestalt — Continuidad: ambas métricas deben cubrir los mismos años para
+    que las dos líneas de cada facet sean comparables en el eje X.
+    Similitud: si P80/P20 falta para alguna isla, ese panel quedaría con una
+    sola línea, rompiendo la coherencia visual con los demás paneles del facet.
+    La escala Y libre exige que P80/P20 y Gini tengan rangos distintos —
+    si fueran iguales el free_y no aportaría ningún valor.
+    """
+    df     = _load_gini()
+    passed = True
+    report_md = "### Precondiciones: p8020_vs_gini_islas\n\n"
+
+    for medida in MEDIDAS_GINI:
+        sub = df[(df["MEDIDAS"] == medida) & (df["tipo_territorio"] == "isla")]
+
+        # Todas las islas presentes
+        islas_ok = set(ISLAS_ORDEN) - set(sub["TERRITORIO"].unique())
+        ok = len(islas_ok) == 0
+        passed = passed and ok
+        report_md += f"- `{medida}` en todas las islas: {'🟢' if ok else '🔴'} (faltan: {islas_ok or '–'})\n"
+
+        # 9 años por isla
+        por_isla = sub.groupby("TERRITORIO")["TIME_PERIOD"].nunique()
+        inc      = por_isla[por_isla < 9].index.tolist()
+        ok = len(inc) == 0
+        passed = passed and ok
+        report_md += f"- `{medida}` 9 años completos: {'🟢' if ok else '🔴'} (incompletas: {inc or '–'})\n"
+
+    # Rangos distintos entre métricas (confirma que free_y tiene sentido)
+    r_gini  = df[df["MEDIDAS"] == "Índice de Gini"]["OBS_VALUE"]
+    r_p8020 = df[df["MEDIDAS"] == "Distribución de la renta P80/P20"]["OBS_VALUE"]
+    rangos_solapan = (
+        r_gini.min() < r_p8020.max() and r_p8020.min() < r_gini.max()
+        and abs(r_gini.mean() - r_p8020.mean()) > 5
+    )
+    ok = rangos_solapan
+    passed = passed and ok
+    report_md += f"- Rangos distintos (justifica free_y): {'🟢' if ok else '⚠️'} (Gini ~{r_gini.mean():.1f}, P80/P20 ~{r_p8020.mean():.1f})\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_P8020": MetadataValue.md(report_md)},
     )
