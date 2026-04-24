@@ -21,8 +21,11 @@ from plots_assets import (
     get_plot_dir,
     plot_gini_evolucion_islas,
     plot_brecha_salarial_islas,
-    plot_brecha_vs_renta,
     plot_precariedad_genero,
+    plot_heatmap_segregacion_sectorial,
+    plot_covid_sueldos_islas,
+    plot_covid_prestaciones_islas,
+    plot_brecha_temporal_edad,
     _load_gini,
     _load_rentas,
     ISLAS_ORDEN,
@@ -1496,26 +1499,6 @@ def check_datos_brecha_islas(context):
     )
 
 
-@asset_check(
-    asset=plot_brecha_vs_renta,
-    description="Precondiciones para el scatter plot de brecha salarial vs renta bruta media.",
-)
-def check_datos_brecha_renta(context):
-    from plots_assets import get_plot_config
-    cfg = get_plot_config()["renta_cajas"]
-    
-    renta = pd.read_csv(os.path.join("..", "data-P5", "processed", cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    n_mun = renta["municipio"].nunique()
-    
-    passed = n_mun >= 40
-    report_md = "### Precondiciones: Brecha vs Renta\n\n"
-    report_md += f"- Municipios con datos de renta suficientes (≥ 40): {'🟢' if passed else '🔴'} ({n_mun})\n"
-    
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Brecha_Renta": MetadataValue.md(report_md)},
-    )
 
 @asset_check(
     asset=plot_precariedad_genero,

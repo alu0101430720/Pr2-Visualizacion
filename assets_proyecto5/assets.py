@@ -180,8 +180,11 @@ def preprocesar_datos_p5() -> str:
         "plot_renta_violin",
         "plot_gini_evolucion_islas",
         "plot_brecha_salarial_islas",
-        "plot_brecha_vs_renta",
         "plot_precariedad_genero",
+        "plot_heatmap_segregacion_sectorial",
+        "plot_covid_sueldos_islas",
+        "plot_covid_prestaciones_islas",
+        "plot_brecha_temporal_edad",
     ],
     group_name="publicacion",
     description=(
