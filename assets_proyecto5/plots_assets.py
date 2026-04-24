@@ -885,7 +885,7 @@ def plot_precariedad_genero(context: AssetExecutionContext) -> None:
         + geom_col(width=0.6, alpha=0.9, color="white", size=0.5)
         + geom_text(
             aes(label="round(pct, 1).astype(str) + '%'"), 
-            position=position_stack(vjust=0.5), size=10, color="white", fontdict={'weight': 'bold'}
+            position=position_stack(vjust=0.5), size=10, color="white", fontweight='bold'
         )
         + coord_flip()
         + scale_fill_manual(
