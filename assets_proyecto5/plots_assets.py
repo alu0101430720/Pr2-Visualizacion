@@ -728,7 +728,7 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
         + geom_hline(yintercept=0, linetype="dashed", color="#555555", size=0.8)
         + geom_boxplot(alpha=0.6, outlier_alpha=0, width=0.5, color="#333333")
         + geom_jitter(width=0.15, size=2, alpha=0.8, color="#222222")
-        + scale_fill_brewer(type="qual", palette="Set2", guide=False)
+        + scale_fill_brewer(type="qual", palette="Set2", guide=None)
         + coord_flip()
         + labs(
             title=f"Distribución de la brecha salarial por isla — Prov. S/C Tenerife ({AÑO_MAPA})",
