@@ -52,9 +52,18 @@ def cargar_gdf_municipios(año: int, logger=None) -> gpd.GeoDataFrame | None:
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
+    """
+    IDONEIDAD: Sueldos vs. Prestaciones por sexo (2021-2023).
+    Detecta si el dataset tiene columna de sexo para desagregar H/M.
+    GESTALT: Similitud — azul=#4A90D9 (Hombres), rosa=#D94A8C (Mujeres).
+    Figura/Fondo — Sueldos y Prestaciones destacados; resto en gris tenue.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.lines as mlines
+
     cfg = get_plot_config()["distribucion_lineas"]
     df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    
+
     LABELS = {
         "OTRAS_PRESTACIONES":     "Otras prestaciones",
         "OTROS_INGRESOS":         "Otros ingresos",
@@ -64,48 +73,73 @@ def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
     }
     df["componente"] = df["MEDIDAS_CODE"].map(LABELS)
 
-    agg = (
-        df.groupby(["año", "componente"])["OBS_VALUE"]
-        .agg(
-            mediana="median",
-            q25=lambda x: x.quantile(0.25),
-            q75=lambda x: x.quantile(0.75),
-        )
-        .reset_index()
-    )
+    COLOR_H    = "#4A90D9"
+    COLOR_M    = "#D94A8C"
+    DESTACADOS = {"Sueldos y salarios", "Prest. desempleo"}
 
-    p = (
-        ggplot(agg, aes(x="año", y="mediana", color="componente", fill="componente", group="componente"))
-        + geom_ribbon(aes(ymin="q25", ymax="q75"), alpha=0.12, color=None)
-        + geom_line(size=1.2)
-        + geom_point(size=3, stroke=0.4)
-        + scale_x_continuous(breaks=cfg["x_breaks"])
-        + scale_color_brewer(type="qual", palette="Set2", name="Componente")
-        + scale_fill_brewer(type="qual", palette="Set2", guide=None)
-        + labs(
-            title="Evolución de la distribución de ingresos — Tenerife",
-            subtitle="Mediana por sección censal · banda IQR (Q25–Q75)",
-            x="Año",
-            y="% sobre renta total",
-            caption="Fuente: ISTAC",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(12, 6),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            panel_grid_minor=element_blank(),
-            panel_grid_major_y=element_line(color="#dddddd", size=0.5), panel_grid_major_x=element_blank(),
-            legend_position="bottom",
-            legend_title=element_blank(),
-        )
-    )
+    col_sexo = "sexo" if "sexo" in df.columns else ("Sexo" if "Sexo" in df.columns else None)
+    tiene_sexo = (col_sexo is not None
+                  and bool(set(df[col_sexo].dropna().unique()) & {"Hombres", "Mujeres"}))
 
+    fig, ax = plt.subplots(figsize=(13, 6))
+    fig.patch.set_facecolor("white")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.yaxis.grid(True, color="#eeeeee", zorder=0)
+
+    if tiene_sexo:
+        for comp in df["componente"].dropna().unique():
+            is_dest = comp in DESTACADOS
+            for sexo in ["Hombres", "Mujeres"]:
+                col = COLOR_H if sexo == "Hombres" else COLOR_M
+                sub = (df[(df["componente"] == comp) & (df[col_sexo] == sexo)]
+                       .groupby("año")["OBS_VALUE"].median().reset_index())
+                if len(sub) == 0:
+                    continue
+                ax.plot(sub["año"], sub["OBS_VALUE"], color=col,
+                        lw=2.2 if is_dest else 0.8,
+                        alpha=1.0 if is_dest else 0.2,
+                        marker="o", markersize=5 if is_dest else 2,
+                        zorder=3 if is_dest else 1)
+                if is_dest:
+                    etiqueta = f"{'Sueldos' if 'Sueldos' in comp else 'Prest.'} {'H' if sexo == 'Hombres' else 'M'}"
+                    ax.text(sub.iloc[-1]["año"] + 0.05, sub.iloc[-1]["OBS_VALUE"],
+                            etiqueta, fontsize=8, color=col, va="center", ha="left")
+        handles = [
+            mlines.Line2D([], [], color=COLOR_H, lw=2, label="Hombres"),
+            mlines.Line2D([], [], color=COLOR_M, lw=2, label="Mujeres"),
+            mlines.Line2D([], [], color="#aaaaaa", lw=0.8, alpha=0.5, label="Otros componentes"),
+        ]
+        ax.legend(handles=handles, fontsize=9, frameon=False, loc="upper right")
+        subtitulo = "Mediana por seccion censal · destacados: Sueldos y Prestaciones por desempleo"
+    else:
+        COLORES_COMP = {"Sueldos y salarios": "#4A90D9", "Prest. desempleo": "#e63946"}
+        for comp in df["componente"].dropna().unique():
+            is_dest = comp in DESTACADOS
+            col = COLORES_COMP.get(comp, "#cccccc")
+            sub = df[df["componente"] == comp].groupby("año")["OBS_VALUE"].median().reset_index()
+            ax.plot(sub["año"], sub["OBS_VALUE"], color=col,
+                    lw=2.0 if is_dest else 0.8, alpha=1.0 if is_dest else 0.35,
+                    marker="o", markersize=4 if is_dest else 2)
+            if is_dest and len(sub) > 0:
+                ax.text(sub.iloc[-1]["año"] + 0.05, sub.iloc[-1]["OBS_VALUE"],
+                        comp, fontsize=8.5, color=col, va="center", ha="left")
+        subtitulo = "Mediana por seccion censal · Sueldos y Prestaciones por desempleo destacados"
+
+    ax.set_xlim(cfg["x_breaks"][0] - 0.2, cfg["x_breaks"][-1] + 1.0)
+    ax.set_xticks(cfg["x_breaks"])
+    ax.set_xticklabels(cfg["x_breaks"], fontsize=9)
+    ax.set_ylabel("% sobre renta total", fontsize=10)
+    ax.set_xlabel(None)
+    ax.set_title("Fuentes de ingreso por sexo — Tenerife 2021-2023",
+                 fontsize=13, fontweight="bold", pad=12)
+    ax.text(0.01, -0.08, subtitulo, transform=ax.transAxes, fontsize=9, color="#555555")
+    fig.text(0.99, 0.01, "Fuente: ISTAC", ha="right", fontsize=8, color="#888888")
+
+    plt.tight_layout()
     out_path = os.path.join(get_plot_dir(), "distribucion_lineas.png")
-    p.save(out_path, width=12, height=6, dpi=150, verbose=False)
-    
-    context.add_output_metadata({"plot": MetadataValue.md(f"![Lineas Distribucion]({out_path})")})
-
+    fig.savefig(out_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    context.add_output_metadata({"plot": MetadataValue.md(f"![Fuentes de Ingreso]({out_path})")})
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_actividad_barras(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["actividad_barras"]
@@ -122,12 +156,12 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
         ggplot(agg, aes(x="factor(Periodo)", y="num_casos", fill="Sexo"))
         + geom_col(position="stack", width=0.7, alpha=0.9)
         + facet_wrap("~ actividad", scales="free_y", ncol=3)
-        + scale_fill_manual(values={"Hombres": "#2B6CB0", "Mujeres": "#D53F8C"})
+        + scale_fill_manual(values={"Hombres": "#4A90D9", "Mujeres": "#D94A8C"})
         + scale_y_continuous(labels=fmt_k)
         + labs(
             title="Actividad económica por año y sexo — Tenerife",
             subtitle="Suma de trabajadores por sección censal",
-            x="Año", y="Nº trabajadores", fill="Sexo",
+            x=None, y="Nº trabajadores", fill="Sexo",
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
@@ -161,7 +195,7 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
         ggplot(pivot, aes(x="reorder(ocupacion_wrap, brecha)", y="brecha", fill="direccion"))
         + geom_col(width=0.6, alpha=0.9)
         + geom_hline(yintercept=0, linetype="dashed", color="#333333", size=0.5)
-        + scale_fill_manual(values={"Mayoría Hombres": "#2B6CB0", "Mayoría Mujeres": "#D53F8C"})
+        + scale_fill_manual(values={"Mayoría Hombres": "#4A90D9", "Mayoría Mujeres": "#D94A8C"})
         + scale_y_continuous(labels=fmt_k)
         + coord_flip()
         + labs(
@@ -183,47 +217,6 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
     out_path = os.path.join(get_plot_dir(), "ocupacion_divergente.png")
     p.save(out_path, width=12, height=6, dpi=150, verbose=False)
     context.add_output_metadata({"plot": MetadataValue.md(f"![Ocupacion Divergente]({out_path})")})
-
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_renta_cajas(context: AssetExecutionContext) -> None:
-    cfg = get_plot_config()["renta_cajas"]
-    df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    medida = cfg["medida"]
-
-    rent = df[df["MEDIDAS_CODE"] == medida].copy()
-    top15 = rent.groupby("municipio")["OBS_VALUE"].median().nlargest(15).index.tolist()
-    rent15 = rent[rent["municipio"].isin(top15)].copy()
-    orden = rent15.groupby("municipio")["OBS_VALUE"].median().sort_values(ascending=False).index.tolist()
-    rent15["municipio"] = pd.Categorical(rent15["municipio"], categories=orden, ordered=True)
-
-    PALETTE_YEAR = {2021: "#a8dadc", 2022: "#457b9d", 2023: "#1d3557"}
-
-    p = (
-        ggplot(rent15, aes(x="municipio", y="OBS_VALUE"))
-        + geom_boxplot(fill="#457b9d", color="#1d3557", alpha=0.7, outlier_alpha=0)
-        + geom_jitter(aes(color="factor(año)"), width=0.15, size=1.5, alpha=0.6)
-        + scale_color_manual(values=list(PALETTE_YEAR.values()), name="Año")
-        + scale_y_continuous(labels=fmt_k)
-        + coord_flip()
-        + labs(
-            title=f"{medida.replace('_', ' ').title()} — Top 15 municipios de S/C de Tenerife",
-            subtitle="Distribución por sección censal · puntos = valores anuales individuales",
-            x=None, y="€ / año",
-            caption="Fuente: ISTAC",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(12, 7),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            axis_text_y=element_text(size=9),
-            legend_position="right",
-        )
-    )
-
-    out_path = os.path.join(get_plot_dir(), f"renta_{medida.lower()}.png")
-    p.save(out_path, width=12, height=7, dpi=150, verbose=False)
-    context.add_output_metadata({"plot": MetadataValue.md(f"![Renta Cajas]({out_path})")})
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
@@ -287,97 +280,6 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
     context.add_output_metadata({"plot": MetadataValue.md(f"![Mapa Distribucion]({out_path})")})
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_mapa_generico(context: AssetExecutionContext) -> None:
-    cfg = get_plot_config()["mapa_generico"]
-    dataset_name = cfg["dataset"]
-    año = cfg["ano"]
-    geojson_name = f"secciones_{año}0101_tenerife.json"
-    
-    filtro_medida = cfg.get("filtro_medida")
-    filtro_actividad = cfg.get("filtro_actividad")
-    filtro_ocupacion = cfg.get("filtro_ocupacion")
-    filtro_sexo = cfg.get("filtro_sexo")
-    cmap = cfg.get("cmap", "YlOrRd")
-
-    df = pd.read_csv(get_processed_path(dataset_name))
-    cols = df.columns.tolist()
-
-    if "MEDIDAS_CODE" in cols and "OBS_VALUE" in cols:
-        col_año = "año"
-        col_val = "OBS_VALUE"
-        mask = df[col_año] == año
-        if filtro_medida:
-            mask &= df["MEDIDAS_CODE"] == filtro_medida
-        label_val = filtro_medida or "OBS_VALUE"
-
-    elif "Actividad económica" in cols:
-        col_año = "Periodo"
-        col_val = "num_casos"
-        mask = df[col_año] == año
-        if filtro_actividad:
-            mask &= df["Actividad económica"] == filtro_actividad
-        if filtro_sexo:
-            mask &= df["Sexo"] == filtro_sexo
-        label_val = f"{filtro_actividad or 'Todas'} · {filtro_sexo or 'Ambos sexos'}"
-
-    elif "ocupacion" in cols:
-        col_año = "año"
-        col_val = "num_casos"
-        mask = df[col_año] == año
-        if filtro_ocupacion:
-            mask &= df["ocupacion"] == filtro_ocupacion
-        if filtro_sexo:
-            mask &= df["sexo"] == filtro_sexo
-        label_val = f"{filtro_ocupacion or 'Todas'} · {filtro_sexo or 'Ambos sexos'}"
-
-    else:
-        raise ValueError("Estructura de dataset no reconocida para el mapa genérico.")
-
-    # Agregar a municipio (suma para conteos, mediana para porcentajes/rentas)
-    agg_fn = "sum" if col_val == "num_casos" else "median"
-    df_datos = (
-        df[mask]
-        .groupby("municipio", as_index=False)[col_val]
-        .agg(agg_fn)
-    )
-
-    gdf_mun = cargar_gdf_municipios(año, context.log)
-    if gdf_mun is None:
-        context.log.warning(f"GeoJSON no disponible para {año}. Asset omitido.")
-        return
-
-    gdf = gdf_mun.merge(df_datos, on="municipio", how="left")
-
-    fig, ax = plt.subplots(figsize=(14, 10))
-    # Para geopandas plots muy finos
-    gdf.plot(
-        column=col_val,
-        cmap=cmap,
-        linewidth=0.08,
-        edgecolor="white",
-        legend=True,
-        legend_kwds={"label": label_val, "orientation": "vertical", "shrink": 0.55, "pad": 0.01},
-        missing_kwds={"color": "#dddddd", "label": "Sin datos"},
-        ax=ax,
-    )
-
-    titulo = f"{label_val} — Tenerife {año}"
-    ax.set_title(titulo, fontsize=14, fontweight="bold", pad=12)
-    ax.annotate(
-        f"Por municipios · {dataset_name} · Fuente: ISTAC",
-        xy=(0.01, 0.98), xycoords="axes fraction",
-        fontsize=9, color="#555555", va="top",
-    )
-    ax.axis("off")
-    fig.tight_layout()
-
-    out_path = os.path.join(get_plot_dir(), f"mapa_{dataset_name.replace('.csv','').replace('-','_')}_{año}.png")
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    
-    context.add_output_metadata({"plot": MetadataValue.md(f"![Mapa Geoespacial]({out_path})")})
-
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["brecha_salarial"]
     
@@ -432,7 +334,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     mediana_global = long["brecha"].median()
     COLORES = {
         "Brecha aumenta":       "#C0392B",
-        "Brecha disminuye":     "#2B6CB0",
+        "Brecha disminuye":     "#4A90D9",
         "Sin cambio relevante": "#AAAAAA",
     }
     
@@ -455,7 +357,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             ha="left", nudge_x=0.05, size=9
         )
         + scale_color_manual(values=COLORES, name=None)
-        + scale_x_discrete(expand=(0.3, 0))  # espacio para etiquetas
+        + scale_x_discrete(expand=(0.45, 0))  # espacio para nombres de municipio
         + labs(
             title="Evolución de la brecha salarial de género por municipio",
             subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top {TOP_N_FIXED} municipios · {AÑO_INI}→{AÑO_FIN}",
@@ -559,65 +461,14 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     
     context.add_output_metadata({"plot": MetadataValue.md(f"![Mapa Brecha Salarial]({out_path})")})
 
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_renta_violin(context: AssetExecutionContext) -> None:
-    df = pd.read_csv(
-        get_processed_path("distribucion-renta-ingresos.csv")
-    ).dropna(subset=["OBS_VALUE"])
- 
-    LABELS = {
-        "OTRAS_PRESTACIONES":     "Otras prestaciones",
-        "OTROS_INGRESOS":         "Otros ingresos",
-        "PENSIONES":              "Pensiones",
-        "PRESTACIONES_DESEMPLEO": "Prest. desempleo",
-        "SUELDOS_SALARIOS":       "Sueldos y salarios",
-    }
-    df["componente"] = df["MEDIDAS_CODE"].map(LABELS)
- 
-    p = (
-        ggplot(df, aes(x="componente", y="OBS_VALUE", fill="componente"))
-        + geom_violin(trim=False, alpha=0.7, color="white")
-        + geom_boxplot(
-            width=0.12, fill="white", color="#333333",
-            outlier_shape=None, alpha=0.9,
-        )
-        + scale_fill_brewer(type="qual", palette="Set2", guide=None)
-        + coord_flip()
-        + labs(
-            title="Distribución del peso de cada fuente de ingresos — Tenerife",
-            subtitle="% sobre renta total por sección censal · 2021-2023 · forma completa de la distribución",
-            x=None,
-            y="% sobre renta total",
-            caption="Fuente: ISTAC",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(12, 6),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            axis_text_y=element_text(size=10),
-            panel_grid_major_y=element_blank(),
-        )
-    )
- 
-    out_path = os.path.join(get_plot_dir(), "renta_violin.png")
-    p.save(out_path, width=12, height=6, dpi=150, verbose=False)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Renta Violin]({out_path})")}
-    )
-# ── Constantes compartidas ────────────────────────────────────────────────────
+# ── Constantes y helpers compartidos ─────────────────────────────────────────
 ISLAS_ORDEN = [
     "Canarias", "Tenerife", "Gran Canaria", "La Palma",
     "La Gomera", "El Hierro", "Lanzarote", "Fuerteventura",
 ]
 
-# Municipios de Tenerife (reutilizados de checks_p5)
-
-
-
 def _load_gini() -> pd.DataFrame:
     return pd.read_csv(get_processed_path("gini.csv")).dropna(subset=["OBS_VALUE"])
-
 
 def _load_rentas() -> pd.DataFrame:
     return pd.read_csv(get_processed_path("rentas.csv")).dropna(subset=["OBS_VALUE"])
@@ -670,12 +521,23 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
         + geom_line()
         + geom_point(stroke=0.3)
         + scale_x_continuous(breaks=list(range(2015, 2024)))
-        + scale_color_brewer(type="qual", palette="Set2", name="Isla")
+        + scale_color_manual(
+            values={
+                "Tenerife":       "#e07b39",
+                "Lanzarote":      "#e9c46a",
+                "Fuerteventura":  "#f4a261",
+                "Gran Canaria":   "#a8c5da",
+                "La Palma":       "#b5c8b8",
+                "La Gomera":      "#c9b8d0",
+                "El Hierro":      "#d4c5b0",
+            },
+            name="Isla"
+        )
         + scale_alpha_manual(values={True: 1.0, False: 0.3}, guide=None)
         + scale_size_manual(values={True: 2.0, False: 0.8}, guide=None)
         + labs(
             title="Evolución del Índice de Gini por isla — Canarias 2015-2023",
-            subtitle="Islas más pobladas y turísticas destacadas · Valores altos = mayor desigualdad",
+            subtitle="Islas turísticas destacadas (Tenerife, Lanzarote, Fuerteventura) · Valores altos = mayor desigualdad",
             x=None, y="Índice de Gini",
             caption="Fuente: ISTAC",
         )
@@ -828,7 +690,7 @@ def plot_precariedad_genero(context: AssetExecutionContext) -> None:
             title="La Brecha de Precariedad: Tipos de Contrato por Género",
             subtitle="Porcentaje de contratos firmados en Canarias (Marzo 2026)\nIzquierda: Mayor precariedad · Derecha: Mayor estabilidad",
             x=None, y=None,
-            caption="Fuente: ISTAC"
+            caption="Fuente: SEPE / OBECAN · Contratos marzo 2026"
         )
         + scale_y_continuous(labels=lambda lst: [f"{abs(x):.0f}%" for x in lst])
         + theme_minimal()
@@ -1053,10 +915,15 @@ def _plot_covid_lineas(context, medida, ylabel, ylim, titulo, fname):
     ISLAS_TURISTICAS = {"Lanzarote", "Fuerteventura", "Tenerife"}
     ISLAS_RESTO      = {"Gran Canaria", "La Palma", "La Gomera", "El Hierro"}
     
-    # Paleta cualitativa para todas las islas
+    # Paleta coherente con el proyecto
     COLORES = {
-        "Lanzarote": "#e9c46a", "Fuerteventura": "#f4a261", "Tenerife": "#e07b39",
-        "Gran Canaria": "#457b9d", "La Palma": "#2a9d8f", "La Gomera": "#8ab17d", "El Hierro": "#b5838d"
+        "Lanzarote":     "#e9c46a",
+        "Fuerteventura": "#f4a261",
+        "Tenerife":      "#e07b39",
+        "Gran Canaria":  "#b0bec5",
+        "La Palma":      "#b0bec5",
+        "La Gomera":     "#b0bec5",
+        "El Hierro":     "#b0bec5",
     }
 
     fig, ax = plt.subplots(figsize=(13, 6))
@@ -1072,15 +939,15 @@ def _plot_covid_lineas(context, medida, ylabel, ylim, titulo, fname):
     # Dibujar todas las islas, destacando las turísticas
     handles = []
     
-    # Primero el resto (fondo)
-    for isla in ISLAS_RESTO:
+    # Primero el resto (fondo): líneas tenues, mismo gris del proyecto
+    for isla in sorted(ISLAS_RESTO):
         sub = rentas[(rentas["TERRITORIO"] == isla) &
                      (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
-        col = COLORES[isla]
+        col = COLORES[isla]  # siempre #b0bec5
         ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
-                color=col, lw=1.5, marker="o", markersize=3,
-                alpha=0.3, zorder=2)
-        handles.append(mpatches.Patch(color=col, label=isla, alpha=0.3))
+                color=col, lw=1.2, marker="o", markersize=2.5,
+                alpha=0.4, zorder=2)
+        handles.append(mpatches.Patch(color=col, label=isla, alpha=0.45))
 
     # Luego turísticas (figura)
     for isla in ISLAS_TURISTICAS:
@@ -1192,7 +1059,7 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
         "Distribución del tipo de contrato por edad y género — Canarias, Marzo 2026",
         fontsize=14, fontweight="bold", y=1.02,
     )
-    fig.text(0.99, -0.04, "Fuente: OBECAN",
+    fig.text(0.99, -0.04, "Fuente: SEPE / OBECAN · Contratos marzo 2026",
              ha="right", fontsize=8, color="#888888")
 
     plt.tight_layout(rect=[0, 0.02, 1, 1])

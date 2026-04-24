@@ -9,12 +9,9 @@ from plots_assets import (
     plot_distribucion_lineas,
     plot_actividad_barras,
     plot_ocupacion_divergente,
-    plot_renta_cajas,
     plot_mapa_distribucion_renta,
-    plot_mapa_generico,
     plot_brecha_salarial,
     plot_mapa_brecha_salarial,
-    plot_renta_violin,
     get_processed_path,
     get_geojson_path,
     get_plot_config,
@@ -26,8 +23,6 @@ from plots_assets import (
     plot_covid_sueldos_islas,
     plot_covid_prestaciones_islas,
     plot_brecha_temporal_edad,
-    _load_gini,
-    _load_rentas,
     ISLAS_ORDEN,
 )
 
@@ -832,55 +827,6 @@ def check_datos_ocupacion_divergente(context):
 
 
 @asset_check(
-    asset=plot_renta_cajas,
-    description="Precondiciones para plot_renta_cajas.",
-)
-def check_datos_renta_cajas(context):
-    """
-    Gestalt — Proximidad: municipios de otras islas mezclados con Tenerife
-    en el top 15 rompen la agrupación geográfica implícita (bug observado).
-    Gestalt — Similitud: sin los 3 años el jitter por color pierde significado.
-    """
-    cfg   = get_plot_config()["renta_cajas"]
-    medida = cfg["medida"]
-    df    = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    passed = True
-    report_md = "### Precondiciones: renta_cajas\n\n"
-
-    ok = medida in set(df["MEDIDAS_CODE"].dropna().unique()) if "MEDIDAS_CODE" in df.columns else False
-    passed = passed and ok
-    report_md += f"- Medida `{medida}` presente: {'🟢' if ok else '🔴'}\n"
-
-    rent = df[df["MEDIDAS_CODE"] == medida] if ok else df
-    mun  = set(rent["municipio"].dropna().unique()) if "municipio" in rent.columns else set()
-    ajenos = {m for m in mun if inferir_isla(m) not in ("Tenerife", "Desconocida")}
-    ok = len(ajenos) == 0
-    passed = passed and ok
-    report_md += f"- Sin municipios de otras islas: {'🟢' if ok else f'🔴 {ajenos}'}\n"
-
-    mun_tf = {m for m in mun if inferir_isla(m) == "Tenerife"}
-    ok = len(mun_tf) >= 15
-    passed = passed and ok
-    report_md += f"- Municipios Tenerife ≥ 15: {'🟢' if ok else '🔴'} ({len(mun_tf)})\n"
-
-    fuera = int(((rent["OBS_VALUE"] < 5_000) | (rent["OBS_VALUE"] > 300_000)).sum())
-    ok    = fuera == 0
-    passed = passed and ok
-    report_md += f"- OBS_VALUE ∈ [5k, 300k]: {'🟢' if ok else '🔴'} ({fuera} fuera)\n"
-
-    años = set(rent["año"].dropna().unique()) if "año" in rent.columns else set()
-    ok   = AÑOS_ESPERADOS.issubset(años)
-    passed = passed and ok
-    report_md += f"- Años {AÑOS_ESPERADOS}: {'🟢' if ok else '🔴'} ({años})\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Cajas": MetadataValue.md(report_md)},
-    )
-
-
-@asset_check(
     asset=plot_mapa_distribucion_renta,
     description="Precondiciones para plot_mapa_distribucion_renta.",
 )
@@ -934,49 +880,6 @@ def check_datos_mapa_distribucion(context):
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Mapa_Dist": MetadataValue.md(report_md)},
-    )
-
-
-@asset_check(
-    asset=plot_mapa_generico,
-    description="Precondiciones para plot_mapa_generico.",
-)
-def check_datos_mapa_generico(context):
-    """
-    Gestalt — Figura/Fondo: una combinación dataset/filtro/año que produce
-    0 registros genera un mapa completamente gris sin ningún aviso visible.
-    """
-    cfg  = get_plot_config()["mapa_generico"]
-    año  = cfg["ano"]
-    df   = pd.read_csv(get_processed_path(cfg["dataset"]))
-    passed = True
-    report_md = f"### Precondiciones: mapa_generico (año={año})\n\n"
-
-    ok = os.path.exists(get_geojson_path(f"secciones_{año}0101_tenerife.json"))
-    passed = passed and ok
-    report_md += f"- GeoJSON año={año}: {'🟢' if ok else '🔴'}\n"
-
-    col_año = "año" if "año" in df.columns else "Periodo" if "Periodo" in df.columns else None
-    if col_año:
-        ok = año in df[col_año].dropna().unique()
-        passed = passed and ok
-        report_md += f"- Año {año} en dataset: {'🟢' if ok else '🔴'}\n"
-
-    mask = (df[col_año] == año) if col_año else pd.Series([True] * len(df))
-    for param, col in [("filtro_medida", "MEDIDAS_CODE"), ("filtro_actividad", "Actividad económica"),
-                       ("filtro_ocupacion", "ocupacion"), ("filtro_sexo", "Sexo")]:
-        val = cfg.get(param)
-        if val and col in df.columns:
-            mask = mask & (df[col] == val)
-    n  = int(mask.sum())
-    ok = n > 0
-    passed = passed and ok
-    report_md += f"- Registros tras filtros: {'🟢' if ok else '🔴'} ({n})\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Mapa_Generico": MetadataValue.md(report_md)},
     )
 
 
@@ -1073,38 +976,6 @@ def check_datos_mapa_brecha(context):
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Mapa_Brecha": MetadataValue.md(report_md)},
-    )
-
-
-@asset_check(
-    asset=plot_renta_violin,
-    description="Precondiciones para plot_renta_violin.",
-)
-def check_datos_renta_violin(context):
-    """
-    Gestalt — Similitud: sin los 5 componentes la paleta Set2 reasigna colores
-    rompiendo la coherencia visual con plot_distribucion_lineas.
-    Con n<30 la estimación KDE produce formas artefactuales (violines falsos).
-    """
-    df     = pd.read_csv(get_processed_path("distribucion-renta-ingresos.csv")).dropna(subset=["OBS_VALUE"])
-    passed = True
-    report_md = "### Precondiciones: renta_violin\n\n"
-
-    faltantes = COMPONENTES_DIST - set(df["MEDIDAS_CODE"].dropna().unique())
-    ok = len(faltantes) == 0
-    passed = passed and ok
-    report_md += f"- Componentes completos: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
-
-    insuf = df.groupby("MEDIDAS_CODE")["OBS_VALUE"].count()
-    insuf = insuf[insuf < 30].index.tolist()
-    ok    = len(insuf) == 0
-    passed = passed and ok
-    report_md += f"- n ≥ 30 (KDE fiable): {'🟢' if ok else '🔴'} ({insuf or '–'})\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Violin": MetadataValue.md(report_md)},
     )
 
 
@@ -1438,7 +1309,7 @@ def check_datos_gini_evolucion(context):
     Similitud: sin Canarias como referencia, el lector no puede calibrar
     si una isla está por encima o debajo del agregado regional.
     """
-    df     = _load_gini()
+    df     = pd.read_csv(get_processed_path("gini.csv")).dropna(subset=["OBS_VALUE"])
     passed = True
     report_md = "### Precondiciones: gini_evolucion_islas\n\n"
 
