@@ -1,6 +1,5 @@
 import os
 import numpy as np
-from checks_p5 import MUNICIPIOS_TENERIFE, inferir_isla
 import yaml
 import pandas as pd
 import geopandas as gpd
@@ -689,6 +688,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_gini_scatter_sueldos(context: AssetExecutionContext) -> None:
+    from checks_p5 import inferir_isla
     """
     IDONEIDAD: dos variables continuas × 88 municipios → el scatter es la
     geometría canónica. Responde la pregunta central del Acto final del
@@ -779,6 +779,7 @@ def plot_gini_scatter_sueldos(context: AssetExecutionContext) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_gini_heatmap_tenerife(context: AssetExecutionContext) -> None:
+    from checks_p5 import MUNICIPIOS_TENERIFE
     """
     IDONEIDAD: 31 municipios × 9 años × 1 variable continua → el heatmap
     es más eficiente en espacio que 31 líneas superpuestas (overplotting
