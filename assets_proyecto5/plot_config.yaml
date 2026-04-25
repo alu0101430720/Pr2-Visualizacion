@@ -16,27 +16,12 @@ actividad_barras:
 ocupacion_divergente:
   dataset: "ocupacion-sc-3.csv"
 
-renta_cajas:
-  dataset: "rentamedia-sc-3.csv"
-  medida: "RENTA_BRUTA_MEDIA_HOGAR"   # Opciones: RENTA_BRUTA_MEDIA_HOGAR, RENTA_BRUTA_MEDIA_PERSONA, RENTA_NETA_MEDIA_HOGAR, RENTA_NETA_MEDIA_PERSONA, RENTA_NETA_UNIDAD_CONSUMO_MEDIA, RENTA_NETA_UNIDAD_CONSUMO_MEDIANA
-
-mapa_generico:
-  dataset: "rentamedia-sc-3.csv"      # Opciones: "rentamedia-sc-3.csv", "actividad-sc-3.csv", "ocupacion-sc-3.csv"
-  ano: 2023
-  cmap: "YlOrRd"                      # Cualquier paleta válida de matplotlib
-  
-  # Filtros opcionales (deja en null si no aplica a tu dataset)
-  filtro_medida: "RENTA_BRUTA_MEDIA_HOGAR"       # (solo util para rentamedia)
-  filtro_actividad: null                        # ej: "Servicios", "Construcción" (solo actividad)
-  filtro_ocupacion: null                        # ej: "Ocupaciones elementales" (solo ocupacion)
-  filtro_sexo: null                             # ej: "Hombres", "Mujeres" (actividad u ocupacion)
 
 brecha_salarial:
   dataset_ocu: "ocupacion-sc-3.csv"
   dataset_dist: "distribucion-renta-ingresos.csv"
-  top_n: 20
+  top_n: 5
   ano_ini: 2021
   ano_fin: 2023
   ano_mapa: 2023
   umbral: 0.02
-  top_n_label: 5

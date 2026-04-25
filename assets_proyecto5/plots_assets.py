@@ -338,7 +338,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante")
     )
     slope["brecha_media"] = (slope["brecha_ini"] + slope["brecha_fin"]) / 2
-    top = slope.nlargest(5, "brecha_media")
+    top = slope.nlargest(TOP_N, "brecha_media")
 
     long = pd.concat([
         top.assign(año=AÑO_INI, brecha=top["brecha_ini"]),
@@ -382,7 +382,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         + scale_x_discrete(expand=(0.45, 0.45))
         + labs(
             title="Evolución de la brecha salarial de género por municipio",
-            subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top 5 municipios · {AÑO_INI}→{AÑO_FIN}",
+            subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top {TOP_N} municipios · {AÑO_INI}→{AÑO_FIN}",
             x=None, y="Índice de brecha salarial ponderado",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
@@ -410,7 +410,6 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     
     AÑO_INI = cfg.get("ano_ini", 2021)
     AÑO_FIN = cfg.get("ano_fin", 2023)
-    TOP_N_LABEL = cfg.get("top_n_label", 5)
     
     ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
     dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
