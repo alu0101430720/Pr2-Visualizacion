@@ -86,19 +86,29 @@ def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
     ax.spines[["top", "right"]].set_visible(False)
     ax.yaxis.grid(True, color="#eeeeee", zorder=0)
 
+    # Colores neutros por componente no destacado (para que sean distinguibles)
+    COLORES_TENUES = {
+        "Pensiones":          "#a890b8",
+        "Otras prestaciones": "#7db89a",
+        "Otros ingresos":     "#c8a87a",
+    }
+
     if tiene_sexo:
         for comp in df["componente"].dropna().unique():
             is_dest = comp in DESTACADOS
             for sexo in ["Hombres", "Mujeres"]:
-                col = COLOR_H if sexo == "Hombres" else COLOR_M
+                if is_dest:
+                    col = COLOR_H if sexo == "Hombres" else COLOR_M
+                else:
+                    col = COLORES_TENUES.get(comp, "#bbbbbb")
                 sub = (df[(df["componente"] == comp) & (df[col_sexo] == sexo)]
                        .groupby("año")["OBS_VALUE"].median().reset_index())
                 if len(sub) == 0:
                     continue
                 ax.plot(sub["año"], sub["OBS_VALUE"], color=col,
-                        lw=2.2 if is_dest else 0.8,
-                        alpha=1.0 if is_dest else 0.2,
-                        marker="o", markersize=5 if is_dest else 2,
+                        lw=2.2 if is_dest else 0.9,
+                        alpha=1.0 if is_dest else 0.35,
+                        marker="o", markersize=5 if is_dest else 2.5,
                         zorder=3 if is_dest else 1)
                 if is_dest:
                     etiqueta = f"{'Sueldos' if 'Sueldos' in comp else 'Prest.'} {'H' if sexo == 'Hombres' else 'M'}"
@@ -112,7 +122,13 @@ def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
         ax.legend(handles=handles, fontsize=9, frameon=False, loc="upper right")
         subtitulo = "Mediana por seccion censal · destacados: Sueldos y Prestaciones por desempleo"
     else:
-        COLORES_COMP = {"Sueldos y salarios": "#4A90D9", "Prest. desempleo": "#e63946"}
+        COLORES_COMP = {
+            "Sueldos y salarios": "#4A90D9",
+            "Prest. desempleo":   "#e63946",
+            "Pensiones":          "#a890b8",
+            "Otras prestaciones": "#7db89a",
+            "Otros ingresos":     "#c8a87a",
+        }
         for comp in df["componente"].dropna().unique():
             is_dest = comp in DESTACADOS
             col = COLORES_COMP.get(comp, "#cccccc")
@@ -210,6 +226,7 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
             plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
             panel_grid_major_y=element_blank(),
+            panel_grid_major_x=element_line(color="#dddddd", size=0.4),
             legend_position="bottom",
         )
     )
@@ -255,7 +272,7 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
 
     gdf = gdf_mun.merge(df_fil, on="municipio", how="left")
 
-    fig, ax = plt.subplots(figsize=(14, 10))
+    fig, ax = plt.subplots(figsize=(14, 8))
 
     gdf.plot(
         column="OBS_VALUE",
@@ -424,7 +441,7 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     lim = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
     vmin, vmax = -lim, lim
 
-    fig, ax = plt.subplots(figsize=(12, 10))
+    fig, ax = plt.subplots(figsize=(12, 8))
     año = AÑO_MAPA
 
     gdf_mun = cargar_municipios(año)
@@ -613,16 +630,17 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
             title="Distribución de la brecha de género por isla — Toda Canarias",
             subtitle="Índice > 0: Contratación favorable a hombres · Índice < 0: Favorable a mujeres\nPuntos = Municipios · Proxy: Contratos marzo 2026 × Dependencia Salarial 2023",
             x=None, y="Índice de brecha salarial/laboral ponderado",
-            caption="Fuente: ISTAC",
+            caption="Fuente: SEPE / OBECAN · Contratos marzo 2026",
         )
         + theme_minimal()
         + theme(
-            figure_size=(10, 6),
+            figure_size=(12, 6),
             plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=9, color="#555555"),
             axis_text_y=element_text(size=11, face="bold"),
             panel_grid_minor=element_blank(),
             panel_grid_major_y=element_blank(),
+            panel_grid_major_x=element_line(color="#dddddd", size=0.4),
         )
     )
     out = os.path.join(get_plot_dir(), "brecha_salarial_islas.png")
@@ -852,7 +870,7 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     )
     fig.text(
         0.01, -0.02,
-        "Azul = mayoría mujeres · Rojo = mayoría hombres · Blanco = paridad  ·  Fuente: SEPE / ISTAC",
+        "Azul = mayoría mujeres · Rojo = mayoría hombres · Blanco = paridad  ·  Fuente: SEPE / OBECAN · Contratos marzo 2026",
         fontsize=8, color="#666666",
     )
 
@@ -915,15 +933,15 @@ def _plot_covid_lineas(context, medida, ylabel, ylim, titulo, fname):
     ISLAS_TURISTICAS = {"Lanzarote", "Fuerteventura", "Tenerife"}
     ISLAS_RESTO      = {"Gran Canaria", "La Palma", "La Gomera", "El Hierro"}
     
-    # Paleta coherente con el proyecto
+    # Islas turísticas: paleta del proyecto. Resto: colores individuales pero tenues.
     COLORES = {
         "Lanzarote":     "#e9c46a",
         "Fuerteventura": "#f4a261",
         "Tenerife":      "#e07b39",
-        "Gran Canaria":  "#b0bec5",
-        "La Palma":      "#b0bec5",
-        "La Gomera":     "#b0bec5",
-        "El Hierro":     "#b0bec5",
+        "Gran Canaria":  "#7fa8c9",   # azul desaturado
+        "La Palma":      "#7db89a",   # verde salvia
+        "La Gomera":     "#a890b8",   # lila desaturado
+        "El Hierro":     "#c8a87a",   # ocre tenue
     }
 
     fig, ax = plt.subplots(figsize=(13, 6))
@@ -1050,19 +1068,18 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
         if ax == axes[0]:
             ax.set_ylabel("% sobre contratos del grupo edad-sexo", fontsize=10)
 
-    handles = [mpatches.Patch(color=c, label=s, alpha=0.85)
-               for s, c in COLORS.items()]
-    fig.legend(handles=handles, loc="upper right", fontsize=10,
-               frameon=False, bbox_to_anchor=(0.99, 0.97))
-
     fig.suptitle(
         "Distribución del tipo de contrato por edad y género — Canarias, Marzo 2026",
-        fontsize=14, fontweight="bold", y=1.02,
+        fontsize=13, fontweight="bold",
     )
-    fig.text(0.99, -0.04, "Fuente: SEPE / OBECAN · Contratos marzo 2026",
+    # Leyenda integrada dentro del área del figura
+    handles = [mpatches.Patch(color=c, label=s, alpha=0.85) for s, c in COLORS.items()]
+    fig.legend(handles=handles, loc="lower center", ncol=2, fontsize=9,
+               frameon=False, bbox_to_anchor=(0.5, -0.04))
+    fig.text(0.99, -0.07, "Fuente: SEPE / OBECAN · Contratos marzo 2026",
              ha="right", fontsize=8, color="#888888")
 
-    plt.tight_layout(rect=[0, 0.02, 1, 1])
+    plt.tight_layout(rect=[0, 0.0, 1, 0.96])
     out = os.path.join(get_plot_dir(), "brecha_temporal_parcial_edad.png")
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
