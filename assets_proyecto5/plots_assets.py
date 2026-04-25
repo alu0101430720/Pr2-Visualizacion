@@ -156,6 +156,7 @@ def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
     fig.savefig(out_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     context.add_output_metadata({"plot": MetadataValue.md(f"![Fuentes de Ingreso]({out_path})")})
+
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_actividad_barras(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["actividad_barras"]
@@ -171,7 +172,7 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
     p = (
         ggplot(agg, aes(x="factor(Periodo)", y="num_casos", fill="Sexo"))
         + geom_col(position="stack", width=0.7, alpha=0.9)
-        + facet_wrap("~ actividad", scales="free_y", ncol=3)
+        + facet_wrap("~ actividad", scales="free_y", ncol=2)
         + scale_fill_manual(values={"Hombres": "#4A90D9", "Mujeres": "#D94A8C"})
         + scale_y_continuous(labels=fmt_k)
         + labs(
@@ -654,10 +655,6 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Brecha Islas]({out})")}
     )
-
-# ══════════════════════════════════════════════════════════════════════════════
-# G11 — Barras Divergentes: Precariedad por Género
-# ══════════════════════════════════════════════════════════════════════════════
 
 
 
