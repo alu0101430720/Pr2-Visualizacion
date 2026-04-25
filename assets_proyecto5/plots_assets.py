@@ -402,7 +402,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Brecha Salarial Slope]({out_path})")}
     )
-    
+
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["brecha_salarial"]
@@ -658,130 +658,6 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
 # ══════════════════════════════════════════════════════════════════════════════
 # G11 — Barras Divergentes: Precariedad por Género
 # ══════════════════════════════════════════════════════════════════════════════
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_precariedad_genero(context: AssetExecutionContext) -> None:
-    """
-    IDONEIDAD: barras horizontales apiladas y divergentes H vs M.
-    Parte izquierda = precariedad (Temp. Parcial, Otros), parte derecha = estabilidad.
-    GESTALT: Similitud — una barra por sexo, mismo eje. Cierre — la línea en 0
-    separa dos zonas semánticas claramente. Figura/Fondo — colores de proyecto.
-    DISEÑO: reescrito en matplotlib para control total de layout y etiquetas.
-    """
-    import matplotlib.pyplot as plt
-    import matplotlib.patches as mpatches
-    import numpy as np
-
-    df = pd.read_csv(get_processed_path("contratos_202603.csv")).dropna(subset=["Contratos"])
-    df.columns = df.columns.str.strip()
-    for c in df.select_dtypes("object").columns:
-        df[c] = df[c].str.strip()
-
-    df = df[df["sexo"].isin(["Hombres", "Mujeres"])]
-
-    def mapear(tc):
-        if "Indefinido" in tc:     return "Indefinido"
-        if "Tiempo Parcial" in tc: return "Temporal Parcial"
-        if "Tiempo Completo" in tc: return "Temporal Completo"
-        return "Otros"
-
-    df["categoria"] = df["Tipo Contrato"].apply(mapear)
-
-    agg = df.groupby(["sexo", "categoria"])["Contratos"].sum().reset_index()
-    tot = agg.groupby("sexo")["Contratos"].sum().reset_index(name="total")
-    agg = agg.merge(tot, on="sexo")
-    agg["pct"] = agg["Contratos"] / agg["total"] * 100
-
-    # Orden narrativo: izquierda = precariedad, derecha = estabilidad
-    PRECARIEDAD = ["Temporal Parcial", "Otros"]
-    ESTABILIDAD = ["Temporal Completo", "Indefinido"]
-    COLORES = {
-        "Indefinido":        "#2a9d8f",
-        "Temporal Completo": "#f4a261",
-        "Temporal Parcial":  "#e63946",
-        "Otros":             "#aaaaaa",
-    }
-    SEXOS = ["Mujeres", "Hombres"]   # Mujeres arriba para énfasis narrativo
-
-    fig, ax = plt.subplots(figsize=(12, 4))
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("white")
-
-    bar_h = 0.5
-    y_pos = {s: i for i, s in enumerate(SEXOS)}
-
-    for sexo in SEXOS:
-        y = y_pos[sexo]
-        datos = agg[agg["sexo"] == sexo].set_index("categoria")["pct"]
-
-        # Lado izquierdo (precariedad, valores negativos)
-        left = 0.0
-        for cat in reversed(PRECARIEDAD):
-            val = datos.get(cat, 0)
-            ax.barh(y, -val, left=left, height=bar_h,
-                    color=COLORES[cat], alpha=0.92, zorder=3)
-            if val > 3.5:
-                ax.text(left - val / 2, y, f"{val:.0f}%",
-                        ha="center", va="center", fontsize=9,
-                        color="white", fontweight="bold")
-            left -= val
-
-        # Lado derecho (estabilidad, valores positivos)
-        right = 0.0
-        for cat in ESTABILIDAD:
-            val = datos.get(cat, 0)
-            ax.barh(y, val, left=right, height=bar_h,
-                    color=COLORES[cat], alpha=0.92, zorder=3)
-            if val > 3.5:
-                ax.text(right + val / 2, y, f"{val:.0f}%",
-                        ha="center", va="center", fontsize=9,
-                        color="white", fontweight="bold")
-            right += val
-
-    # Línea divisoria central
-    ax.axvline(0, color="#333333", lw=1.5, zorder=4)
-
-    # Zona izquierda = precariedad, zona derecha = estabilidad
-    xlim = ax.get_xlim()
-    ax.axvspan(xlim[0], 0, color="#fff0f0", alpha=0.35, zorder=0)
-    ax.axvspan(0, xlim[1], color="#f0fff8", alpha=0.35, zorder=0)
-    ax.text(xlim[0] + 0.5, len(SEXOS) - 0.1, "← Mayor precariedad",
-            fontsize=8.5, color="#e63946", va="bottom", ha="left", style="italic")
-    ax.text(xlim[1] - 0.5, len(SEXOS) - 0.1, "Mayor estabilidad →",
-            fontsize=8.5, color="#2a9d8f", va="bottom", ha="right", style="italic")
-
-    ax.set_yticks(list(y_pos.values()))
-    COLORES_SEXO = {"Mujeres": "#D94A8C", "Hombres": "#4A90D9"}
-    ax.set_yticklabels([f"  {s}" for s in SEXOS], fontsize=12, fontweight="bold")
-    for tick, sexo in zip(ax.get_yticklabels(), SEXOS):
-        tick.set_color(COLORES_SEXO[sexo])
-    ax.set_xlabel("% sobre el total de contratos firmados", fontsize=9)
-    ax.set_xlim(xlim)
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{abs(v):.0f}%"))
-    ax.yaxis.grid(False)
-    ax.xaxis.grid(True, color="#eeeeee", zorder=0)
-    ax.spines[["top", "right", "left"]].set_visible(False)
-
-    # Leyenda compacta
-    handles = [mpatches.Patch(color=COLORES[c], label=c, alpha=0.92)
-               for c in ["Temporal Parcial", "Otros", "Temporal Completo", "Indefinido"]]
-    ax.legend(handles=handles, loc="lower center", ncol=4, fontsize=8.5,
-              frameon=False, bbox_to_anchor=(0.5, -0.28))
-
-    ax.set_title("La brecha de precariedad: tipos de contrato por género",
-                 fontsize=13, fontweight="bold", pad=12)
-    ax.text(0.0, -0.22,
-            "Canarias, Marzo 2026  ·  Porcentaje sobre el total de contratos de cada sexo",
-            transform=ax.transAxes, fontsize=9, color="#555555")
-    fig.text(0.99, -0.01, "Fuente: SEPE / OBECAN · Contratos marzo 2026",
-             ha="right", fontsize=8, color="#888888")
-
-    plt.tight_layout()
-    out = os.path.join(get_plot_dir(), "precariedad_genero.png")
-    fig.savefig(out, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Precariedad Genero]({out})")}
-    )
 
 
 
