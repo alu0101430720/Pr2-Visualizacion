@@ -22,6 +22,7 @@ from plots_assets import (
     plot_covid_sueldos_islas,
     plot_covid_prestaciones_islas,
     plot_brecha_temporal_edad,
+    plot_historico_tipos_contrato_por_edad,
     ISLAS_ORDEN,
 )
 
@@ -1370,4 +1371,29 @@ def check_datos_brecha_islas(context):
 
 
 
-
+@asset_check(
+    asset=plot_historico_tipos_contrato_por_edad,
+    description="Precondiciones para el gráfico de histórico de contratos.",
+)
+def check_datos_historico_contratos(context):
+    import os, glob
+    import config
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    
+    files_23 = glob.glob(os.path.join(data_dir, "2023", "*.csv"))
+    files_24 = glob.glob(os.path.join(data_dir, "2024", "*.csv"))
+    
+    has_2019 = os.path.exists(os.path.join(data_dir, "contratos2019.csv"))
+    has_2026 = os.path.exists(os.path.join(data_dir, "processed", "contratos_202603.csv"))
+    
+    passed = (has_2019 or len(files_23) > 0 or len(files_24) > 0) and has_2026
+    
+    report_md = "### Precondiciones: Histórico de Contratos\n\n"
+    report_md += f"- Datos 2026 marzo presentes: {'🟢' if has_2026 else '🔴'}\n"
+    report_md += f"- Histórico disponible (2019, 2023 o 2024): {'🟢' if (has_2019 or len(files_23) > 0 or len(files_24) > 0) else '🔴'}\n"
+    
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_Historico_Contratos": MetadataValue.md(report_md)},
+    )

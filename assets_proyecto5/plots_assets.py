@@ -1025,3 +1025,223 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     context.add_output_metadata({"plot": MetadataValue.md(f"![Brecha Edad]({out})")})
+
+# ==============================================================================
+# G12 — Histórico de Tipos de Contrato por Edad
+# ==============================================================================
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> None:
+    """
+    Genera 4 figuras (una por tipo de contrato) con la evolución histórica
+    del % de cada tipo sobre el total de contratos, por franja de edad y género.
+
+    IDONEIDAD: variable continua (%) × temporal (2019-2026) × nominal (edad) ×
+    binario (sexo). Las líneas temporales son la codificación natural del tiempo;
+    el facet por edad permite comparar grupos sin solapamiento.
+
+    GESTALT:
+      Continuidad — líneas como codificación de tendencia temporal.
+      Similitud   — azul = hombres, rosa = mujeres, coherente con el proyecto.
+      Figura/Fondo — banda gris suave marca el cambio estructural de 2022
+                     sin competir con las líneas.
+      Proximidad  — los tres paneles de edad permiten comparación inmediata.
+
+    DISEÑO:
+      Grid mínimo (solo horizontal). Sin etiquetas de contexto en el gráfico.
+      Puntos solo en extremos (2019 y 2025) + etiqueta del valor final.
+      2026 como diamante semitransparente (dato parcial — solo marzo).
+      Área de brecha rosa solo en Temporal Parcial (única con brecha estructural).
+      sharey=True para comparación directa entre edades dentro de cada figura.
+    """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    import glob, warnings
+    warnings.filterwarnings("ignore")
+
+    def detect_sep(p):
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            l = f.readline()
+        return ";" if l.count(";") > l.count(",") else ","
+
+    # ── Carga histórico completo ───────────────────────────────────────────────
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+
+    FUENTES = [
+        (2019, [os.path.join(data_dir, "contratos2019.csv")],                               "contratos"),
+        (2020, [os.path.join(data_dir, "contratos2020.csv")],                               "contratos"),
+        (2021, [os.path.join(data_dir, "contratos2021.csv")],                               "contratos"),
+        (2022, [os.path.join(data_dir, "contratos2022.csv")],                               "contratos"),
+        (2023, sorted(glob.glob(os.path.join(data_dir, "2023", "contratos_registrados_*.csv"))), "Contratos"),
+        (2024, sorted(glob.glob(os.path.join(data_dir, "2024", "contratos_registrados_*.csv"))), "Contratos"),
+        (2025, sorted(glob.glob(os.path.join(data_dir, "2025", "contratos_202*.csv"))),         "Contratos"),
+    ]
+
+    # 2026: solo marzo
+    df26 = pd.read_csv(get_processed_path("contratos_202603.csv"),
+                       sep=detect_sep(get_processed_path("contratos_202603.csv")),
+                       dtype={"Contratos": float})
+    df26.columns = df26.columns.str.strip()
+    df26 = df26.rename(columns={"Contratos": "c"})
+    for col in df26.select_dtypes(include="object").columns:
+        df26[col] = df26[col].str.strip()
+    df26 = df26[df26["sexo"].isin(["Hombres", "Mujeres"])]
+    df26["año"] = 2026
+
+    all_dfs = []
+    for año, paths, col_c in FUENTES:
+        dfs = []
+        for p in paths:
+            if not os.path.exists(p):
+                continue
+            df = pd.read_csv(p, sep=detect_sep(p), dtype={col_c: float})
+            df.columns = df.columns.str.strip()
+            df = df.rename(columns={col_c: "c"})
+            for col in df.select_dtypes(include="object").columns:
+                df[col] = df[col].str.strip()
+            dfs.append(df[df["sexo"].isin(["Hombres", "Mujeres"])])
+        if dfs:
+            df_y = pd.concat(dfs, ignore_index=True)
+            df_y["año"] = año
+            all_dfs.append(df_y)
+
+    all_dfs.append(df26)
+    df_hist = pd.concat(all_dfs, ignore_index=True)
+
+    TC_MAP = {
+        "Indefinido":               "Indefinido",
+        "Temporal Tiempo Completo": "Temp. Completo",
+        "Temporal Tiempo Parcial":  "Temp. Parcial",
+        "Conversión a Indefinido":  "Conversión",
+    }
+    EDADES  = ["Menor de 25", "Entre 25 y 44", "45 o más"]
+    AÑOS    = [2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026]
+    COLORS  = {"Hombres": "#4A90D9", "Mujeres": "#D94A8C"}
+    TC_TITLE = {
+        "Temp. Parcial":  "Contrato temporal a tiempo parcial",
+        "Temp. Completo": "Contrato temporal a tiempo completo",
+        "Conversión":     "Conversión a indefinido",
+        "Indefinido":     "Contrato indefinido",
+    }
+    # Solo Temp. Parcial tiene brecha estructural visible → área de relleno
+    TC_FILL = {"Temp. Parcial": True, "Temp. Completo": False,
+               "Conversión": False, "Indefinido": False}
+
+    df_hist["tc"]   = df_hist["Tipo Contrato"].str.strip().map(TC_MAP)
+    df_hist = df_hist.dropna(subset=["tc", "edad"])
+    df_hist = df_hist[df_hist["edad"].isin(EDADES)]
+
+    total = (df_hist.groupby(["año", "edad", "sexo"])["c"]
+             .sum().reset_index(name="total"))
+    agg   = (df_hist.groupby(["año", "edad", "sexo", "tc"])["c"]
+             .sum().reset_index())
+    agg   = agg.merge(total, on=["año", "edad", "sexo"])
+    agg["pct"] = agg["c"] / agg["total"] * 100
+
+    # ── Una figura por tipo de contrato ───────────────────────────────────────
+    output_paths = []
+    for tc_name in TC_MAP.values():
+        fig, axes = plt.subplots(1, len(EDADES), figsize=(14, 5),
+                                 sharey=True, sharex=True)
+        fig.patch.set_facecolor("white")
+
+        for col, edad in enumerate(EDADES):
+            ax = axes[col]
+            ax.set_facecolor("white")
+
+            # Banda cambio 2022 sutil
+            ax.axvspan(1, 2.5, color="#f5f5f5", alpha=0.8, zorder=0)
+            ax.axvline(2.5, color="#dddddd", lw=0.8, zorder=1)
+
+            for sexo in ["Hombres", "Mujeres"]:
+                sub  = agg[(agg["sexo"] == sexo) &
+                           (agg["edad"] == edad) &
+                           (agg["tc"]   == tc_name)].set_index("año")
+                vals = [sub.loc[a, "pct"] if a in sub.index else np.nan
+                        for a in AÑOS]
+
+                # Línea 2019-2025
+                xs = [i for i, a in enumerate(AÑOS)
+                      if a <= 2025 and not np.isnan(vals[i])]
+                ys = [vals[i] for i in xs]
+                ax.plot(xs, ys, color=COLORS[sexo], lw=2.2,
+                        alpha=0.9, zorder=4, solid_capstyle="round")
+
+                # Puntos en extremos + etiqueta en 2025
+                for i_pt in [0, AÑOS.index(2025)]:
+                    if not np.isnan(vals[i_pt]):
+                        ax.scatter(i_pt, vals[i_pt], s=55,
+                                   color=COLORS[sexo], zorder=5,
+                                   edgecolors="white", linewidths=0.8)
+                        if i_pt == AÑOS.index(2025):
+                            offset = 1.2 if sexo == "Mujeres" else -1.2
+                            va     = "bottom" if sexo == "Mujeres" else "top"
+                            ax.text(i_pt + 0.1, vals[i_pt] + offset,
+                                    f"{vals[i_pt]:.0f}%",
+                                    fontsize=8.5, color=COLORS[sexo],
+                                    fontweight="bold", va=va, ha="left")
+
+                # 2026 — diamante semitransparente
+                i26 = AÑOS.index(2026)
+                v26 = vals[i26]
+                if not np.isnan(v26):
+                    ax.scatter(i26, v26, s=45, color=COLORS[sexo],
+                               marker="D", zorder=5, alpha=0.6,
+                               edgecolors="white", linewidths=0.8)
+
+            # Área brecha solo en Temp. Parcial
+            if TC_FILL[tc_name]:
+                sh = agg[(agg["sexo"]=="Hombres") & (agg["edad"]==edad) &
+                         (agg["tc"]==tc_name)].set_index("año")
+                sm = agg[(agg["sexo"]=="Mujeres") & (agg["edad"]==edad) &
+                         (agg["tc"]==tc_name)].set_index("año")
+                ac = [a for a in AÑOS if a<=2025
+                      and a in sh.index and a in sm.index]
+                ax.fill_between([AÑOS.index(a) for a in ac],
+                                [sh.loc[a,"pct"] for a in ac],
+                                [sm.loc[a,"pct"] for a in ac],
+                                color="#D94A8C", alpha=0.07, zorder=1)
+
+            ax.set_title(edad, fontsize=11, fontweight="bold",
+                         pad=8, color="#333333")
+            ax.set_xticks(range(len(AÑOS)))
+            ax.set_xticklabels(
+                [str(a) if a != 2026 else "Mar\n2026" for a in AÑOS],
+                fontsize=8.5, rotation=30, ha="right")
+
+            ax.yaxis.grid(True, color="#eeeeee", lw=0.8, zorder=0)
+            ax.spines[["top", "right", "bottom"]].set_visible(False)
+            ax.spines["left"].set_color("#eeeeee")
+            ax.tick_params(axis="y", labelsize=8.5, colors="#888888")
+            ax.tick_params(axis="x", length=0)
+
+            if col == 0:
+                ax.set_ylabel("% sobre total contratos del grupo",
+                              fontsize=9.5, color="#444444")
+
+        handles = [mpatches.Patch(color=COLORS[s], label=s)
+                   for s in ["Hombres", "Mujeres"]]
+        handles += [plt.scatter([], [], marker="D", color="#aaaaaa",
+                                s=40, alpha=0.6,
+                                label="Mar 2026 (dato parcial)")]
+        fig.legend(handles=handles, loc="lower center", ncol=3,
+                   fontsize=10, frameon=False, bbox_to_anchor=(0.5, -0.04))
+
+        fig.suptitle(f"{TC_TITLE[tc_name]} — Canarias 2019-2026",
+                     fontsize=13, fontweight="bold", y=1.01)
+        fig.text(0.99, -0.06, "Fuente: OBECAN / SEPE",
+                 ha="right", fontsize=8, color="#888888")
+
+        plt.tight_layout(rect=[0, 0.08, 1, 1])
+
+        safe = tc_name.lower().replace(". ", "_").replace(" ", "_")
+        out  = os.path.join(get_plot_dir(), f"historico_{safe}.png")
+        fig.savefig(out, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        output_paths.append(out)
+        context.log.info(f"✓ {out}")
+
+    context.add_output_metadata({
+        "plots": MetadataValue.md(
+            "\n".join(f"- `{os.path.basename(p)}`" for p in output_paths)
+        )
+    })

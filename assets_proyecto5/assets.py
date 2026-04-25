@@ -181,6 +181,7 @@ def preprocesar_datos_p5() -> str:
         "plot_covid_sueldos_islas",
         "plot_covid_prestaciones_islas",
         "plot_brecha_temporal_edad",
+        "plot_historico_tipos_contrato_por_edad",
     ],
     group_name="publicacion",
     description=(
