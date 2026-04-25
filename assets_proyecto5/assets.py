@@ -180,7 +180,6 @@ def preprocesar_datos_p5() -> str:
         "plot_heatmap_segregacion_sectorial",
         "plot_covid_sueldos_islas",
         "plot_covid_prestaciones_islas",
-        "plot_covid_contratos_2020_vs_2019",
         "plot_brecha_temporal_edad",
         "plot_historico_tipos_contrato_por_edad",
     ],
