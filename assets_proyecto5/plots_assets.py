@@ -159,9 +159,16 @@ def plot_distribucion_lineas(context: AssetExecutionContext) -> None:
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_actividad_barras(context: AssetExecutionContext) -> None:
+    from checks_p5 import inferir_isla
     cfg = get_plot_config()["actividad_barras"]
+    ISLA = cfg.get("isla", "Todas")
+    
     df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["num_casos"])
     df = df[df["Sexo"].isin(["Hombres", "Mujeres"]) & (df["Actividad económica"] != "No consta")]
+    
+    if ISLA != "Todas":
+        df["isla"] = df["municipio"].apply(inferir_isla)
+        df = df[df["isla"] == ISLA]
 
     df["actividad"] = df["Actividad económica"].replace(
         {"Agricultura, ganadería y pesca": "Agricultura/\nGanadería"}
@@ -176,7 +183,7 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
         + scale_fill_manual(values={"Hombres": "#4A90D9", "Mujeres": "#D94A8C"})
         + scale_y_continuous(labels=fmt_k)
         + labs(
-            title="Actividad económica por año y sexo — Tenerife",
+            title=f"Actividad económica por año y sexo — {ISLA if ISLA != 'Todas' else 'Toda la provincia'}",
             subtitle="Suma de trabajadores por sección censal",
             x=None, y="Nº trabajadores", fill="Sexo",
             caption="Fuente: ISTAC",
@@ -944,6 +951,12 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].str.strip()
     df = df[df["sexo"].isin(["Hombres", "Mujeres"])]
+    
+    cfg = get_plot_config().get("brecha_temporal_edad", {})
+    ISLA = cfg.get("isla", "Todas")
+    
+    if ISLA != "Todas":
+        df = df[df["isla"].str.upper() == ISLA.upper()]
 
     TC_MAP = {
         "Indefinido":               "Indefinido",
@@ -995,8 +1008,9 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
         if ax == axes[0]:
             ax.set_ylabel("% sobre contratos del grupo edad-sexo", fontsize=10)
 
+    titulo_loc = "Canarias" if ISLA == "Todas" else ISLA
     fig.suptitle(
-        "Distribución del tipo de contrato por edad y género — Canarias, Marzo 2026",
+        f"Distribución del tipo de contrato por edad y género — {titulo_loc}, Marzo 2026",
         fontsize=13, fontweight="bold",
     )
     # Leyenda integrada dentro del área del figura

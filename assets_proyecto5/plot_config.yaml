@@ -12,6 +12,7 @@ mapa_distribucion:
 
 actividad_barras:
   dataset: "actividad-sc-3.csv"
+  isla: "Tenerife"   # Opciones: "Tenerife", "La Palma", "La Gomera", "El Hierro", o "Todas"
   
 ocupacion_divergente:
   dataset: "ocupacion-sc-3.csv"
@@ -25,3 +26,6 @@ brecha_salarial:
   ano_fin: 2023
   ano_mapa: 2023
   umbral: 0.02
+
+brecha_temporal_edad:
+  isla: "Tenerife"  # Opciones: "Todas", "Tenerife", "Gran Canaria", "Lanzarote", "Fuerteventura", "La Palma", "La Gomera", "El Hierro"
