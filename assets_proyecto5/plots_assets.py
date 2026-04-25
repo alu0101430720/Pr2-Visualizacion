@@ -299,12 +299,12 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["brecha_salarial"]
-    
-    TOP_N     = cfg.get("top_n", 20)
-    AÑO_INI   = cfg.get("ano_ini", 2021)
-    AÑO_FIN   = cfg.get("ano_fin", 2023)
-    UMBRAL    = cfg.get("umbral", 0.02)
-    
+
+    TOP_N   = cfg.get("top_n", 20)
+    AÑO_INI = cfg.get("ano_ini", 2021)
+    AÑO_FIN = cfg.get("ano_fin", 2023)
+    UMBRAL  = cfg.get("umbral", 0.02)
+
     ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
     dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
 
@@ -328,56 +328,60 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
     merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
 
-    ini = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(columns={"indice_brecha": "brecha_ini"})
-    fin = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(columns={"indice_brecha": "brecha_fin"})
-    
+    ini   = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(columns={"indice_brecha": "brecha_ini"})
+    fin   = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(columns={"indice_brecha": "brecha_fin"})
     slope = ini.merge(fin, on="municipio")
-    slope["delta"] = slope["brecha_fin"] - slope["brecha_ini"]
+    slope["delta"]     = slope["brecha_fin"] - slope["brecha_ini"]
     slope["direccion"] = slope["delta"].apply(
-        lambda d: "Brecha aumenta" if d > UMBRAL else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante")
+        lambda d: "Brecha aumenta" if d > UMBRAL
+        else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante")
     )
-
-    TOP_N_FIXED = 5
     slope["brecha_media"] = (slope["brecha_ini"] + slope["brecha_fin"]) / 2
-    top = slope.nlargest(TOP_N_FIXED, "brecha_media")
+    top = slope.nlargest(5, "brecha_media")
 
     long = pd.concat([
         top.assign(año=AÑO_INI, brecha=top["brecha_ini"]),
         top.assign(año=AÑO_FIN, brecha=top["brecha_fin"]),
     ])
-    
     long["año_cat"] = pd.Categorical(long["año"], categories=[AÑO_INI, AÑO_FIN], ordered=True)
 
-    mediana_global = long["brecha"].median()
+    mediana_global = float(long["brecha"].median())
+
+    # ── Paleta coherente con el proyecto ─────────────────────────────────────
+    # e63946 = precariedad/alarma (mismo rojo que Temp. Parcial)
+    # 2a9d8f = mejora/estabilidad (mismo verde que Indefinido)
+    # AAAAAA = neutro (sin cambio)
     COLORES = {
-        "Brecha aumenta":       "#C0392B",
-        "Brecha disminuye":     "#4A90D9",
+        "Brecha aumenta":       "#e63946",
+        "Brecha disminuye":     "#2a9d8f",
         "Sin cambio relevante": "#AAAAAA",
     }
-    
+
     long_ini = long[long["año"] == AÑO_INI]
     long_fin = long[long["año"] == AÑO_FIN]
 
     p = (
         ggplot(long, aes(x="año_cat", y="brecha", group="municipio", color="direccion"))
-        + geom_hline(yintercept=mediana_global, linetype="dashed", color="#888888", size=0.5, alpha=0.7)
+        + geom_hline(yintercept=mediana_global, linetype="dashed",
+                     color="#888888", size=0.5, alpha=0.7)
         + geom_line(size=0.9, alpha=0.8)
         + geom_point(size=2.5, stroke=0.3)
         + geom_text(
-            aes(label="municipio"), 
+            aes(label="municipio"),
             data=long_ini,
-            ha="right", nudge_x=-0.05, size=9
+            ha="right", nudge_x=-0.05, size=9,
         )
         + geom_text(
-            aes(label="municipio"), 
+            aes(label="municipio"),
             data=long_fin,
-            ha="left", nudge_x=0.05, size=9
+            ha="left", nudge_x=0.05, size=9,
         )
         + scale_color_manual(values=COLORES, name=None)
-        + scale_x_discrete(expand=(0.45, 0))  # espacio para nombres de municipio
+        # expand simétrico: margen igual izquierda y derecha para los nombres
+        + scale_x_discrete(expand=(0.45, 0.45))
         + labs(
             title="Evolución de la brecha salarial de género por municipio",
-            subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top {TOP_N_FIXED} municipios · {AÑO_INI}→{AÑO_FIN}",
+            subtitle=f"Índice = ratio H/(H+M) × % sueldos sobre renta · Top 5 municipios · {AÑO_INI}→{AÑO_FIN}",
             x=None, y="Índice de brecha salarial ponderado",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
@@ -395,7 +399,9 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
 
     out_path = os.path.join(get_plot_dir(), "brecha_salarial_slope.png")
     p.save(out_path, width=11, height=9, dpi=150, verbose=False)
-    context.add_output_metadata({"plot": MetadataValue.md(f"![Brecha Salarial Slope]({out_path})")})
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Brecha Salarial Slope]({out_path})")}
+    )
     
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
@@ -655,79 +661,128 @@ def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_precariedad_genero(context: AssetExecutionContext) -> None:
     """
-    Gráfico que muestra la proporción de contratos indefinidos vs temporales a tiempo parcial
-    entre hombres y mujeres, demostrando la brecha de precariedad.
+    IDONEIDAD: barras horizontales apiladas y divergentes H vs M.
+    Parte izquierda = precariedad (Temp. Parcial, Otros), parte derecha = estabilidad.
+    GESTALT: Similitud — una barra por sexo, mismo eje. Cierre — la línea en 0
+    separa dos zonas semánticas claramente. Figura/Fondo — colores de proyecto.
+    DISEÑO: reescrito en matplotlib para control total de layout y etiquetas.
     """
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+    import numpy as np
+
     df = pd.read_csv(get_processed_path("contratos_202603.csv")).dropna(subset=["Contratos"])
-    
-    # Agrupar por sexo y tipo de contrato a nivel regional
-    agrupado = df.groupby(["sexo", "Tipo Contrato"], as_index=False)["Contratos"].sum()
-    
-    # Calcular % dentro de cada sexo
-    total_por_sexo = agrupado.groupby("sexo")["Contratos"].transform("sum")
-    agrupado["pct"] = agrupado["Contratos"] / total_por_sexo * 100
-    
-    # Simplificar categorías de contrato para el storytelling
-    def mapear_contrato(tc):
-        if "Indefinido" in tc: return "Indefinido"
+    df.columns = df.columns.str.strip()
+    for c in df.select_dtypes("object").columns:
+        df[c] = df[c].str.strip()
+
+    df = df[df["sexo"].isin(["Hombres", "Mujeres"])]
+
+    def mapear(tc):
+        if "Indefinido" in tc:     return "Indefinido"
         if "Tiempo Parcial" in tc: return "Temporal Parcial"
         if "Tiempo Completo" in tc: return "Temporal Completo"
         return "Otros"
-        
-    agrupado["categoria"] = agrupado["Tipo Contrato"].apply(mapear_contrato)
-    
-    resumen = agrupado.groupby(["sexo", "categoria"], as_index=False)["pct"].sum()
-    
-    # Diverging: Indefinido y Temporal Completo a la derecha (positivo), Temporal Parcial a la izquierda (negativo)
-    resumen["pct_plot"] = resumen.apply(
-        lambda r: -r["pct"] if r["categoria"] in ["Temporal Parcial", "Otros"] else r["pct"], axis=1
-    )
-    
-    cat_orden = ["Temporal Parcial", "Otros", "Temporal Completo", "Indefinido"]
-    resumen["categoria"] = pd.Categorical(resumen["categoria"], categories=cat_orden, ordered=True)
-    
-    p = (
-        ggplot(resumen, aes(x="sexo", y="pct_plot", fill="categoria"))
-        + geom_hline(yintercept=0, color="#333333", size=1.2)
-        + geom_col(width=0.6, alpha=0.9, color="white", size=0.5)
-        + geom_text(
-            aes(label="round(pct, 1).astype(str) + '%'"), 
-            position=position_stack(vjust=0.5), size=10, color="white", fontweight='bold'
-        )
-        + coord_flip()
-        + scale_fill_manual(
-            values={
-                "Indefinido": "#2a9d8f", 
-                "Temporal Completo": "#e9c46a", 
-                "Temporal Parcial": "#e76f51", 
-                "Otros": "#cccccc"
-            },
-            name="Tipo de Contrato"
-        )
-        + labs(
-            title="La Brecha de Precariedad: Tipos de Contrato por Género",
-            subtitle="Porcentaje de contratos firmados en Canarias (Marzo 2026)\nIzquierda: Mayor precariedad · Derecha: Mayor estabilidad",
-            x=None, y=None,
-            caption="Fuente: SEPE / OBECAN · Contratos marzo 2026"
-        )
-        + scale_y_continuous(labels=lambda lst: [f"{abs(x):.0f}%" for x in lst])
-        + theme_minimal()
-        + theme(
-            figure_size=(10, 5),
-            plot_title=element_text(size=14, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            axis_text_y=element_text(size=12, face="bold"),
-            panel_grid_major_y=element_blank(),
-            panel_grid_minor=element_blank(),
-            legend_position="bottom"
-        )
-    )
-    
+
+    df["categoria"] = df["Tipo Contrato"].apply(mapear)
+
+    agg = df.groupby(["sexo", "categoria"])["Contratos"].sum().reset_index()
+    tot = agg.groupby("sexo")["Contratos"].sum().reset_index(name="total")
+    agg = agg.merge(tot, on="sexo")
+    agg["pct"] = agg["Contratos"] / agg["total"] * 100
+
+    # Orden narrativo: izquierda = precariedad, derecha = estabilidad
+    PRECARIEDAD = ["Temporal Parcial", "Otros"]
+    ESTABILIDAD = ["Temporal Completo", "Indefinido"]
+    COLORES = {
+        "Indefinido":        "#2a9d8f",
+        "Temporal Completo": "#f4a261",
+        "Temporal Parcial":  "#e63946",
+        "Otros":             "#aaaaaa",
+    }
+    SEXOS = ["Mujeres", "Hombres"]   # Mujeres arriba para énfasis narrativo
+
+    fig, ax = plt.subplots(figsize=(12, 4))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    bar_h = 0.5
+    y_pos = {s: i for i, s in enumerate(SEXOS)}
+
+    for sexo in SEXOS:
+        y = y_pos[sexo]
+        datos = agg[agg["sexo"] == sexo].set_index("categoria")["pct"]
+
+        # Lado izquierdo (precariedad, valores negativos)
+        left = 0.0
+        for cat in reversed(PRECARIEDAD):
+            val = datos.get(cat, 0)
+            ax.barh(y, -val, left=left, height=bar_h,
+                    color=COLORES[cat], alpha=0.92, zorder=3)
+            if val > 3.5:
+                ax.text(left - val / 2, y, f"{val:.0f}%",
+                        ha="center", va="center", fontsize=9,
+                        color="white", fontweight="bold")
+            left -= val
+
+        # Lado derecho (estabilidad, valores positivos)
+        right = 0.0
+        for cat in ESTABILIDAD:
+            val = datos.get(cat, 0)
+            ax.barh(y, val, left=right, height=bar_h,
+                    color=COLORES[cat], alpha=0.92, zorder=3)
+            if val > 3.5:
+                ax.text(right + val / 2, y, f"{val:.0f}%",
+                        ha="center", va="center", fontsize=9,
+                        color="white", fontweight="bold")
+            right += val
+
+    # Línea divisoria central
+    ax.axvline(0, color="#333333", lw=1.5, zorder=4)
+
+    # Zona izquierda = precariedad, zona derecha = estabilidad
+    xlim = ax.get_xlim()
+    ax.axvspan(xlim[0], 0, color="#fff0f0", alpha=0.35, zorder=0)
+    ax.axvspan(0, xlim[1], color="#f0fff8", alpha=0.35, zorder=0)
+    ax.text(xlim[0] + 0.5, len(SEXOS) - 0.1, "← Mayor precariedad",
+            fontsize=8.5, color="#e63946", va="bottom", ha="left", style="italic")
+    ax.text(xlim[1] - 0.5, len(SEXOS) - 0.1, "Mayor estabilidad →",
+            fontsize=8.5, color="#2a9d8f", va="bottom", ha="right", style="italic")
+
+    ax.set_yticks(list(y_pos.values()))
+    COLORES_SEXO = {"Mujeres": "#D94A8C", "Hombres": "#4A90D9"}
+    ax.set_yticklabels([f"  {s}" for s in SEXOS], fontsize=12, fontweight="bold")
+    for tick, sexo in zip(ax.get_yticklabels(), SEXOS):
+        tick.set_color(COLORES_SEXO[sexo])
+    ax.set_xlabel("% sobre el total de contratos firmados", fontsize=9)
+    ax.set_xlim(xlim)
+    ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda v, _: f"{abs(v):.0f}%"))
+    ax.yaxis.grid(False)
+    ax.xaxis.grid(True, color="#eeeeee", zorder=0)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+
+    # Leyenda compacta
+    handles = [mpatches.Patch(color=COLORES[c], label=c, alpha=0.92)
+               for c in ["Temporal Parcial", "Otros", "Temporal Completo", "Indefinido"]]
+    ax.legend(handles=handles, loc="lower center", ncol=4, fontsize=8.5,
+              frameon=False, bbox_to_anchor=(0.5, -0.28))
+
+    ax.set_title("La brecha de precariedad: tipos de contrato por género",
+                 fontsize=13, fontweight="bold", pad=12)
+    ax.text(0.0, -0.22,
+            "Canarias, Marzo 2026  ·  Porcentaje sobre el total de contratos de cada sexo",
+            transform=ax.transAxes, fontsize=9, color="#555555")
+    fig.text(0.99, -0.01, "Fuente: SEPE / OBECAN · Contratos marzo 2026",
+             ha="right", fontsize=8, color="#888888")
+
+    plt.tight_layout()
     out = os.path.join(get_plot_dir(), "precariedad_genero.png")
-    p.save(out, width=10, height=5, dpi=150, verbose=False)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Precariedad Genero]({out})")}
     )
+
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
