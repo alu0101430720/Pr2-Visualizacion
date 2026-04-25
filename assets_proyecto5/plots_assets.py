@@ -1245,3 +1245,142 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
             "\n".join(f"- `{os.path.basename(p)}`" for p in output_paths)
         )
     })
+
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_covid_contratos_2020_vs_2019(context: AssetExecutionContext) -> None:
+    '''
+    Dos paneles que comparan la contratación de 2020 mes a mes contra 2019
+    (año de referencia normal) para aislar el efecto COVID de la estacionalidad.
+ 
+    IDONEIDAD: comparar contra el mismo mes del año anterior anula la
+    estacionalidad y deja visible solo el impacto COVID. Un índice base-enero
+    mezclaría ambos efectos. La diferencia en puntos porcentuales de mujeres
+    (panel inferior) es la única magnitud con unidad real e interpretable.
+ 
+    GESTALT:
+      Continuidad  — líneas temporales (panel superior): tendencia mensual.
+      Similitud    — azul = hombres, rosa = mujeres, coherente con el proyecto.
+      Figura/Fondo — área COVID en rosa suave, líneas como figura.
+      Similitud    — barras (panel inferior) por dirección: rojo = mujeres
+                     pierden cuota respecto a 2019, verde = ganan, gris = sin cambio.
+ 
+    DISEÑO:
+      Sin fill_between entre las dos líneas del panel superior — la distancia
+      entre dos series independientes no tiene unidad interpretable.
+      Línea de 0 como referencia única. Banda COVID solo marca el período
+      de Estado de Alarma (abril-junio 2020).
+    '''
+    import matplotlib.pyplot as plt
+    import matplotlib.patches as mpatches
+ 
+    def _detect_sep(p):
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            l = f.readline()
+        return ";" if l.count(";") > l.count(",") else ","
+ 
+    def _cargar(path, col_c):
+        df = pd.read_csv(path, sep=_detect_sep(path), dtype={col_c: float})
+        df.columns = df.columns.str.strip()
+        df = df.rename(columns={col_c: "c"})
+        for col in df.select_dtypes(include="object").columns:
+            df[col] = df[col].str.strip()
+        df["fecha"] = df["fecha"].astype(str).str.replace(".", "", regex=False).str.zfill(6)
+        df["mes"]   = df["fecha"].str[4:6].astype(int)
+        return df[df["sexo"].isin(["Hombres", "Mujeres"])]
+ 
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    df19 = _cargar(os.path.join(data_dir, "contratos2019.csv"), "contratos")
+    df20 = _cargar(os.path.join(data_dir, "contratos2020.csv"), "contratos")
+ 
+    MESES  = ["Ene","Feb","Mar","Abr","May","Jun",
+              "Jul","Ago","Sep","Oct","Nov","Dic"]
+    COLORS = {"Hombres": "#4A90D9", "Mujeres": "#D94A8C"}
+ 
+    def _por_mes(df):
+        m = df.groupby(["mes","sexo"])["c"].sum().unstack("sexo").fillna(0)
+        m["total"] = m["Hombres"] + m["Mujeres"]
+        m["pct_M"] = m["Mujeres"] / m["total"] * 100
+        return m
+ 
+    m19 = _por_mes(df19)
+    m20 = _por_mes(df20)
+ 
+    var_H    = (m20["Hombres"] - m19["Hombres"]) / m19["Hombres"] * 100
+    var_M    = (m20["Mujeres"] - m19["Mujeres"]) / m19["Mujeres"] * 100
+    diff_pct = m20["pct_M"] - m19["pct_M"]
+ 
+    fig, axes = plt.subplots(2, 1, figsize=(13, 9),
+                             gridspec_kw={"height_ratios": [1.4, 1]})
+    fig.patch.set_facecolor("white")
+ 
+    # ── Panel superior: variación relativa ───────────────────────────────────
+    ax1 = axes[0]
+    ax1.set_facecolor("white")
+    ax1.axvspan(2.5, 5.5, color="#fde8e8", alpha=0.45, zorder=0)
+    ax1.axvline(3, color="#c0392b", lw=0.8, ls="--", alpha=0.5, zorder=1)
+    ax1.text(3.1, 4, "Estado de\nAlarma", fontsize=8,
+             color="#c0392b", fontweight="bold", va="top")
+    ax1.axhline(0, color="#aaaaaa", lw=1.0, ls="--", zorder=1)
+    ax1.text(11.1, 0.5, "Sin\ncambio", fontsize=7.5, color="#aaaaaa", va="bottom")
+ 
+    ax1.plot(range(12), var_H, color=COLORS["Hombres"], lw=2.5,
+             marker="o", markersize=6, zorder=4, label="Hombres")
+    ax1.plot(range(12), var_M, color=COLORS["Mujeres"], lw=2.5,
+             marker="o", markersize=6, zorder=4, label="Mujeres")
+ 
+    ax1.set_xticks(range(12))
+    ax1.set_xticklabels(MESES, fontsize=10)
+    ax1.set_ylabel("Variación de contratos respecto a 2019 (%)", fontsize=10)
+    ax1.yaxis.grid(True, color="#eeeeee", zorder=0)
+    ax1.spines[["top", "right"]].set_visible(False)
+    ax1.legend(loc="lower right", fontsize=10, frameon=False)
+    ax1.set_title(
+        "COVID-19 y contratación por género — Canarias 2020 vs 2019",
+        fontsize=13, fontweight="bold", pad=12)
+ 
+    # ── Panel inferior: diferencia en pp de mujeres ──────────────────────────
+    ax2 = axes[1]
+    ax2.set_facecolor("white")
+    ax2.axvspan(2.5, 5.5, color="#fde8e8", alpha=0.45, zorder=0)
+    ax2.axvline(3, color="#c0392b", lw=0.8, ls="--", alpha=0.5, zorder=1)
+    ax2.axhline(0, color="#aaaaaa", lw=1.0, ls="--", zorder=1)
+    ax2.text(11.1, 0.1, "Sin\ncambio", fontsize=7.5, color="#aaaaaa", va="bottom")
+ 
+    for i, (_, val) in enumerate(diff_pct.items()):
+        if val < -0.5:
+            color = "#e63946"
+        elif val > 0.5:
+            color = "#2a9d8f"
+        else:
+            color = "#AAAAAA"
+        ax2.bar(i, val, color=color, alpha=0.85, zorder=3, width=0.65)
+        ax2.text(i, val + (0.12 if val >= 0 else -0.18),
+                 f"{val:+.1f}pp",
+                 ha="center", va="bottom" if val >= 0 else "top",
+                 fontsize=8.5, color=color, fontweight="bold")
+ 
+    ax2.set_xticks(range(12))
+    ax2.set_xticklabels(MESES, fontsize=10)
+    ax2.set_ylabel(
+        "Diferencia en % mujeres\nsobre total contratos (2020 − 2019)",
+        fontsize=9.5)
+    ax2.yaxis.grid(True, color="#eeeeee", zorder=0)
+    ax2.spines[["top", "right"]].set_visible(False)
+ 
+    leg = [
+        mpatches.Patch(color="#e63946", label="Menos mujeres que en 2019", alpha=0.85),
+        mpatches.Patch(color="#2a9d8f", label="Más mujeres que en 2019",   alpha=0.85),
+        mpatches.Patch(color="#AAAAAA", label="Sin diferencia relevante",   alpha=0.85),
+    ]
+    ax2.legend(handles=leg, loc="lower right", fontsize=8.5, frameon=False)
+ 
+    fig.text(0.99, 0.01, "Fuente: OBECAN / SEPE",
+             ha="right", fontsize=8, color="#888888")
+    plt.tight_layout(rect=[0, 0.02, 1, 1])
+ 
+    out = os.path.join(get_plot_dir(), "covid_contratos_2020_vs_2019.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![COVID Contratos 2020 vs 2019]({out})")}
+    )
