@@ -332,8 +332,9 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
 
     DISEÑO:
       9 grupos CNO-1 interpretables y coherentes con la clasificación INE/SEPE.
+      Brecha expresada en % sobre el total de contratos de cada isla — así
+      El Hierro y Tenerife son directamente comparables con escala compartida.
       Filtro min_contratos desde YAML para excluir grupos con n irrelevante.
-      Escala X libre por isla — tamaños de mercado muy distintos entre islas.
     """
     cfg    = get_plot_config()["ocupacion_divergente_canarias"]
     AÑO    = cfg.get("ano", 2025)
@@ -364,10 +365,14 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             .sum().unstack("sexo").fillna(0).reset_index()
         )
         pivot.columns.name = None
-        pivot["brecha"]    = pivot.get("Hombres",0) - pivot.get("Mujeres",0)
-        pivot["total"]     = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
-        pivot              = pivot[pivot["total"] >= MIN_C]
-        pivot["direccion"] = pivot["brecha"].apply(
+        pivot["total_isla"] = df["c"].sum()
+        pivot["brecha"]     = (
+            (pivot.get("Hombres",0) - pivot.get("Mujeres",0))
+            / pivot["total_isla"] * 100
+        )
+        pivot["total"]      = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
+        pivot               = pivot[pivot["total"] >= MIN_C]
+        pivot["direccion"]  = pivot["brecha"].apply(
             lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
 
         p = (
@@ -380,26 +385,33 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + scale_fill_manual(
                 values={"Mayoría Hombres":"#4A90D9",
                         "Mayoría Mujeres":"#D94A8C"}, name=None)
-            + scale_y_continuous(labels=fmt_k)
+            + scale_y_continuous(labels=lambda l: [f"{v:+.1f}%" for v in l])
             + coord_flip()
             + labs(title=titulo,
-                   subtitle="Diferencia contratos (Hombres − Mujeres) · grupos CNO-1",
-                   x=None, y="Diferencia (Hombres − Mujeres)",
+                   subtitle="Diferencia (H − M) como % del total de contratos · grupos CNO-1",
+                   x=None, y="% sobre total contratos (Hombres − Mujeres)",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((11, 6))
         )
         fig_w, fig_h = 11, 6
     else:
         islas_ambito = _islas_en_ambito(AMBITO)
+        # Total por isla para normalizar
+        total_isla = df[df["isla"].isin(ISLAS_VALIDAS)].groupby("isla")["c"].sum()
+
         pivot = (
             df.groupby(["isla","grupo_cno","sexo"])["c"]
             .sum().unstack("sexo").fillna(0).reset_index()
         )
         pivot.columns.name = None
-        pivot["brecha"]    = pivot.get("Hombres",0) - pivot.get("Mujeres",0)
-        pivot["total"]     = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
-        pivot              = pivot[pivot["total"] >= MIN_C]
-        pivot["direccion"] = pivot["brecha"].apply(
+        pivot["total_isla"] = pivot["isla"].map(total_isla)
+        pivot["brecha"]     = (
+            (pivot.get("Hombres",0) - pivot.get("Mujeres",0))
+            / pivot["total_isla"] * 100
+        )
+        pivot["total"]      = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
+        pivot               = pivot[pivot["total"] >= MIN_C]
+        pivot["direccion"]  = pivot["brecha"].apply(
             lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
 
         # Orden global: coherencia visual entre islas
@@ -417,15 +429,15 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + geom_col(width=0.65, alpha=0.9)
             + geom_hline(yintercept=0, linetype="dashed",
                          color="#333333", size=0.5)
-            + facet_wrap("~ isla", scales="free_x", ncol=ncol)
+            + facet_wrap("~ isla", scales="fixed", ncol=ncol)
             + scale_fill_manual(
                 values={"Mayoría Hombres":"#4A90D9",
                         "Mayoría Mujeres":"#D94A8C"}, name=None)
-            + scale_y_continuous(labels=fmt_k)
+            + scale_y_continuous(labels=lambda l: [f"{v:+.1f}%" for v in l])
             + coord_flip()
             + labs(title=titulo,
-                   subtitle="Diferencia (H − M) · grupos CNO-1 · escala X libre por isla",
-                   x=None, y="Diferencia (Hombres − Mujeres)",
+                   subtitle="Diferencia (H − M) como % del total de contratos de cada isla · grupos CNO-1 · escala compartida",
+                   x=None, y="% sobre total contratos (Hombres − Mujeres)",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((16, 10))
             + theme(strip_text=element_text(size=9, face="bold"))
