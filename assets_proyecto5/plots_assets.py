@@ -137,67 +137,6 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
     context.add_output_metadata({"plot": MetadataValue.md(f"![Ocupacion Divergente]({out_path})")})
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
-    cfg = get_plot_config()["mapa_distribucion"]
-    año = cfg["ano"]
-    componente = cfg["componente"]
-    geojson_name = f"secciones_{año}0101_tenerife.json"
-
-    LABELS = {
-        "OTRAS_PRESTACIONES":     "Otras prestaciones (%)",
-        "OTROS_INGRESOS":         "Otros ingresos (%)",
-        "PENSIONES":              "Pensiones (%)",
-        "PRESTACIONES_DESEMPLEO": "Prestaciones desempleo (%)",
-        "SUELDOS_SALARIOS":       "Sueldos y salarios (%)",
-    }
-    
-    CMAPS = {
-        "SUELDOS_SALARIOS":       "Blues",
-        "PENSIONES":              "Oranges",
-        "PRESTACIONES_DESEMPLEO": "Purples",
-        "OTRAS_PRESTACIONES":     "Greens",
-        "OTROS_INGRESOS":         "YlOrBr",
-    }
-
-    df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    df_fil = (
-        df[(df["año"] == año) & (df["MEDIDAS_CODE"] == componente)]
-        .groupby("municipio", as_index=False)["OBS_VALUE"]
-        .median()
-    )
-
-    gdf_mun = cargar_gdf_municipios(año, context.log)
-    if gdf_mun is None:
-        context.log.warning(f"GeoJSON no disponible para {año}. Asset omitido.")
-        return
-
-    gdf = gdf_mun.merge(df_fil, on="municipio", how="left")
-
-    fig, ax = plt.subplots(figsize=(14, 8))
-
-    gdf.plot(
-        column="OBS_VALUE",
-        cmap=CMAPS.get(componente, "YlOrRd"),
-        linewidth=0.08,
-        edgecolor="white",
-        legend=True,
-        legend_kwds={"label": LABELS.get(componente, componente), "orientation": "vertical", "shrink": 0.55, "pad": 0.01},
-        missing_kwds={"color": "#dddddd", "label": "Sin datos"},
-        ax=ax,
-    )
-
-    ax.set_title(f"{LABELS.get(componente, componente).replace(' (%)', '')} sobre renta total — Tenerife {año}", fontsize=14, fontweight="bold", pad=12)
-    ax.annotate("Por municipios · Fuente: ISTAC", xy=(0.01, 0.98), xycoords="axes fraction", fontsize=9, color="#555555", va="top")
-    ax.axis("off")
-    fig.tight_layout()
-
-    out_path = os.path.join(get_plot_dir(), f"mapa_{componente.lower()}_{año}.png")
-    fig.savefig(out_path, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    
-    context.add_output_metadata({"plot": MetadataValue.md(f"![Mapa Distribucion]({out_path})")})
-
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     cfg = get_plot_config()["brecha_salarial"]
 
