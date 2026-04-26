@@ -45,10 +45,10 @@ brecha_temporal_edad:
 
 actividad_barras_canarias:
   ano: 2025
-  ambito: "Canarias"      # Ver opciones arriba
+  ambito: "Tenerife"      # Ver opciones arriba
   top_n_actividades: 6    # Sectores a mostrar (recomendado: 5-8)
 
 ocupacion_divergente_canarias:
   ano: 2025
-  ambito: "Canarias"      # Ver opciones arriba
+  ambito: "Tenerife"      # Ver opciones arriba
   min_contratos: 100      # Excluir grupos CNO con menos de N contratos en esa isla
