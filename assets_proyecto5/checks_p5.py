@@ -6,7 +6,6 @@ import geopandas as gpd
 from dagster import asset_check, AssetCheckResult, MetadataValue, AssetCheckSeverity
 from assets import preprocesar_datos_p5, commitear_plots_a_github
 from plots_assets import (
-    plot_distribucion_lineas,
     plot_actividad_barras,
     plot_ocupacion_divergente,
     plot_mapa_distribucion_renta,
@@ -685,50 +684,6 @@ def check_consistencia_municipios_cruzados(context, preprocesar_datos_p5: str):
         severity=AssetCheckSeverity.WARN,
         metadata={"Consistencia_Municipios": MetadataValue.md(report_md)},
     )
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# BLOQUE 2 — CHECKS DE PLOTS (precondiciones de datos)
-# ══════════════════════════════════════════════════════════════════════════════
-
-@asset_check(
-    asset=plot_distribucion_lineas,
-    description="Precondiciones para plot_distribucion_lineas.",
-)
-def check_datos_distribucion_lineas(context):
-    """
-    Gestalt — Continuidad: sin los 3 años la línea no puede mostrar tendencia.
-    Gestalt — Similitud: sin los 5 componentes la paleta Set2 reasigna colores
-    y rompe la coherencia con el violín que usa la misma paleta.
-    Con n<30 la banda IQR no es estadísticamente fiable (artefactos KDE).
-    """
-    cfg  = get_plot_config()["distribucion_lineas"]
-    df   = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    passed = True
-    report_md = "### Precondiciones: distribucion_lineas\n\n"
-
-    faltantes = COMPONENTES_DIST - set(df["MEDIDAS_CODE"].dropna().unique())
-    ok = len(faltantes) == 0
-    passed = passed and ok
-    report_md += f"- Componentes completos: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
-
-    años = set(df["año"].dropna().unique())
-    ok   = AÑOS_ESPERADOS.issubset(años)
-    passed = passed and ok
-    report_md += f"- Años {AÑOS_ESPERADOS}: {'🟢' if ok else '🔴'} ({años})\n"
-
-    insuf = df.groupby("MEDIDAS_CODE")["OBS_VALUE"].count()
-    insuf = insuf[insuf < 30].index.tolist()
-    ok    = len(insuf) == 0
-    passed = passed and ok
-    report_md += f"- n ≥ 30 por componente (banda IQR fiable): {'🟢' if ok else '🔴'} ({insuf or '–'})\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Lineas": MetadataValue.md(report_md)},
-    )
-
 
 @asset_check(
     asset=plot_actividad_barras,

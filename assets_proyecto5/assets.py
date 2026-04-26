@@ -169,7 +169,6 @@ def preprocesar_datos_p5() -> str:
 
 @asset(
     deps=[
-        "plot_distribucion_lineas",
         "plot_actividad_barras",
         "plot_ocupacion_divergente",
         "plot_mapa_distribucion_renta",
