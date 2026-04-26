@@ -15,3 +15,8 @@ dagster_logs.txt
 .env
 .venv
 venv/
+
+# Datos
+*.csv
+*.tsv
+*.zip
