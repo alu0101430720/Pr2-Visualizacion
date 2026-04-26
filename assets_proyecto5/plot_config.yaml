@@ -13,10 +13,9 @@ mapa_distribucion:
 actividad_barras:
   dataset: "actividad-sc-3.csv"
   isla: "Tenerife"   # Opciones: "Tenerife", "La Palma", "La Gomera", "El Hierro", o "Todas"
-  
+
 ocupacion_divergente:
   dataset: "ocupacion-sc-3.csv"
-
 
 brecha_salarial:
   dataset_ocu: "ocupacion-sc-3.csv"
@@ -29,3 +28,27 @@ brecha_salarial:
 
 brecha_temporal_edad:
   isla: "Tenerife"  # Opciones: "Todas", "Tenerife", "Gran Canaria", "Lanzarote", "Fuerteventura", "La Palma", "La Gomera", "El Hierro"
+
+# ── Nuevos assets con datos de contratos históricos ──────────────────────────
+#
+# ambito controla qué territorio se representa en el gráfico.
+#
+# Opciones para ambito:
+#   "Canarias"      → todas las islas (facet por isla)
+#   "SC Tenerife"   → provincia: Tenerife, La Palma, La Gomera, El Hierro
+#   "Las Palmas"    → provincia: Gran Canaria, Lanzarote, Fuerteventura
+#   nombre de isla  → solo esa isla, sin facet (más legible)
+#     Valores válidos: "Tenerife", "Gran Canaria", "La Palma", "La Gomera",
+#                      "El Hierro", "Lanzarote", "Fuerteventura"
+#
+# ano: año de los contratos a usar (2019-2025 o 2026 para solo marzo)
+
+actividad_barras_canarias:
+  ano: 2025
+  ambito: "Canarias"      # Ver opciones arriba
+  top_n_actividades: 6    # Sectores a mostrar (recomendado: 5-8)
+
+ocupacion_divergente_canarias:
+  ano: 2025
+  ambito: "Canarias"      # Ver opciones arriba
+  min_contratos: 100      # Excluir grupos CNO con menos de N contratos en esa isla

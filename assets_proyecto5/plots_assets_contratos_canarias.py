@@ -1,39 +1,61 @@
 """
 plots_assets_contratos_canarias.py
 
-Nuevos assets que extienden plot_actividad_barras y plot_ocupacion_divergente
-a toda Canarias usando los ficheros de contratos históricos (2019-2025 + mar 2026).
+Assets que extienden plot_actividad_barras y plot_ocupacion_divergente
+a toda Canarias (o a la provincia/isla configurada en plot_config.yaml)
+usando los ficheros de contratos históricos (2019-2025 + mar 2026).
 
 Assets:
-  - plot_actividad_barras_canarias   — barras apiladas H/M por sector e isla
-  - plot_ocupacion_divergente_canarias — divergente H-M por grupo CNO e isla
+  - plot_actividad_barras_canarias
+  - plot_ocupacion_divergente_canarias
 
-Añadir a definitions.py:
+Integración en definitions.py:
     import plots_assets_contratos_canarias
     all_assets = load_assets_from_modules([
         assets, plots_assets, plots_assets_contratos_canarias
     ])
 
-Añadir a commitear_plots_a_github deps:
+Añadir a commitear_plots_a_github deps en assets.py:
     "plot_actividad_barras_canarias",
     "plot_ocupacion_divergente_canarias",
 """
 
-import os
-import re
-import glob
-import warnings
+import os, re, glob, warnings
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from plotnine import *
-from dagster import asset, AssetExecutionContext, MetadataValue
+from dagster import (
+    asset, asset_check, AssetExecutionContext,
+    AssetCheckResult, AssetCheckSeverity, MetadataValue,
+)
 from assets import preprocesar_datos_p5
-from plots_assets import get_processed_path, get_plot_dir, fmt_k
+from plots_assets import get_processed_path, get_plot_dir, get_plot_config, fmt_k
 import config
 
 warnings.filterwarnings("ignore")
+
+# ── Constantes ────────────────────────────────────────────────────────────────
+
+ISLAS_ORDEN   = ["El Hierro","La Gomera","La Palma","Tenerife",
+                 "Gran Canaria","Lanzarote","Fuerteventura"]
+ISLAS_VALIDAS = set(ISLAS_ORDEN)
+
+PROVINCIAS = {
+    "SC Tenerife": {"Tenerife","La Palma","La Gomera","El Hierro"},
+    "Las Palmas":  {"Gran Canaria","Lanzarote","Fuerteventura"},
+}
+
+CNO_GRUPOS = {
+    1: "Directores y gerentes",
+    2: "Técnicos y científicos",
+    3: "Técnicos de apoyo",
+    4: "Administrativos",
+    5: "Servicios y comercio",
+    6: "Trabajadores agrarios",
+    7: "Artesanos e industria",
+    8: "Operadores de maquinaria",
+    9: "Ocupaciones elementales",
+}
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -51,57 +73,76 @@ def _fix_articulo(s: str) -> str:
 
 def _cno_grupo(val) -> int | None:
     """
-    Extrae el grupo CNO (primer dígito) independientemente del formato:
-      - 2019-2022: '5.5', '9.432'  → primer carácter antes del punto
-      - 2023+:     '5120', '9310'  → primer carácter del código
+    Extrae grupo CNO (primer dígito) independientemente del formato:
+      2019-2022: '5.5', '9.432'  →  5, 9
+      2023+:     '5120', '9310'  →  5, 9
     """
     s = str(val).strip().replace(".", "")
     return int(s[0]) if s and s[0].isdigit() else None
 
 
-CNO_GRUPOS = {
-    1: "Directores y gerentes",
-    2: "Técnicos y científicos",
-    3: "Técnicos de apoyo",
-    4: "Administrativos",
-    5: "Servicios y comercio",
-    6: "Trabajadores agrarios",
-    7: "Artesanos e industria",
-    8: "Operadores de maquinaria",
-    9: "Ocupaciones elementales",
-}
-
-ISLAS_ORDEN  = ["El Hierro","La Gomera","La Palma","Tenerife",
-                "Gran Canaria","Lanzarote","Fuerteventura"]
-COLORS_SEX   = {"Hombres": "#4A90D9", "Mujeres": "#D94A8C"}
-
-
-def _cargar_contratos_canarias(data_dir: str, año: int) -> pd.DataFrame | None:
+def _filtrar_ambito(df: pd.DataFrame, ambito: str) -> pd.DataFrame:
     """
-    Carga los ficheros de contratos de un año dado, normaliza columnas,
-    infiere isla para años sin esa columna y aplica corrección de artículos.
-    Devuelve None si no hay ficheros disponibles.
+    Filtra según el ámbito configurado en el YAML.
+    Valores válidos:
+      "Canarias"    → todas las islas
+      "SC Tenerife" → Tenerife, La Palma, La Gomera, El Hierro
+      "Las Palmas"  → Gran Canaria, Lanzarote, Fuerteventura
+      nombre isla   → solo esa isla
+    """
+    if ambito == "Canarias":
+        return df[df["isla"].isin(ISLAS_VALIDAS)].copy()
+    elif ambito in PROVINCIAS:
+        return df[df["isla"].isin(PROVINCIAS[ambito])].copy()
+    elif ambito in ISLAS_VALIDAS:
+        return df[df["isla"] == ambito].copy()
+    else:
+        opts = ["Canarias", "SC Tenerife", "Las Palmas"] + sorted(ISLAS_VALIDAS)
+        raise ValueError(
+            f"Ámbito no reconocido: {ambito!r}. "
+            f"Opciones válidas en plot_config.yaml: {opts}"
+        )
+
+
+def _titulo_ambito(ambito: str) -> str:
+    return {"SC Tenerife": "Prov. SC Tenerife",
+            "Las Palmas":  "Prov. Las Palmas"}.get(ambito, ambito)
+
+
+def _islas_en_ambito(ambito: str) -> list:
+    if ambito == "Canarias":
+        return ISLAS_ORDEN
+    elif ambito in PROVINCIAS:
+        return [i for i in ISLAS_ORDEN if i in PROVINCIAS[ambito]]
+    else:
+        return [ambito]
+
+
+def _cargar_contratos(data_dir: str, año: int) -> pd.DataFrame | None:
+    """
+    Carga contratos de un año, normaliza columnas, infiere isla para
+    ficheros 2019-2022 que no la traen, y calcula grupo CNO-1.
     """
     from checks_p5 import inferir_isla
 
     if año in (2019, 2020, 2021, 2022):
-        paths   = [os.path.join(data_dir, f"contratos{año}.csv")]
-        col_c   = "contratos"
+        paths = [os.path.join(data_dir, f"contratos{año}.csv")]
+        col_c = "contratos"
     elif año == 2026:
-        paths   = [get_processed_path("contratos_202603.csv")]
-        col_c   = "Contratos"
+        paths = [get_processed_path("contratos_202603.csv")]
+        col_c = "Contratos"
     elif año == 2023:
-        paths   = sorted(glob.glob(
+        paths = sorted(glob.glob(
             os.path.join(data_dir, "2023", "contratos_registrados_*.csv")))
-        col_c   = "Contratos"
+        col_c = "Contratos"
     elif año == 2024:
-        paths   = sorted(glob.glob(
+        paths = sorted(glob.glob(
             os.path.join(data_dir, "2024", "contratos_registrados_*.csv")))
-        col_c   = "Contratos"
+        col_c = "Contratos"
     elif año == 2025:
-        paths   = sorted(glob.glob(
+        paths = sorted(glob.glob(
             os.path.join(data_dir, "2025", "contratos_202*.csv")))
-        col_c   = "Contratos"
+        col_c = "Contratos"
     else:
         return None
 
@@ -116,7 +157,7 @@ def _cargar_contratos_canarias(data_dir: str, año: int) -> pd.DataFrame | None:
         df = df.rename(columns={col_c: "c"})
         for col in df.select_dtypes(include="object").columns:
             df[col] = df[col].str.strip()
-        # Corregir artículos en Municipio antes de inferir isla
+        # Corregir artículos antes de inferir isla
         if "Municipio" in df.columns:
             df["Municipio"] = df["Municipio"].apply(_fix_articulo)
         dfs.append(df[df["sexo"].isin(["Hombres", "Mujeres"])])
@@ -124,276 +165,353 @@ def _cargar_contratos_canarias(data_dir: str, año: int) -> pd.DataFrame | None:
     df_año = pd.concat(dfs, ignore_index=True)
     df_año["año"] = año
 
-    # Inferir isla si no existe la columna
+    # Inferir isla si no existe (ficheros 2019-2022)
     if "isla" not in df_año.columns:
         df_año["isla"] = df_año["Municipio"].apply(inferir_isla)
     else:
         df_año["isla"] = df_año["isla"].str.strip().str.title()
 
-    # Grupo CNO
+    # Grupo CNO-1
     if "CNO11" in df_año.columns:
-        df_año["grupo_cno"] = df_año["CNO11"].apply(_cno_grupo).map(CNO_GRUPOS)
+        df_año["grupo_cno"] = (
+            df_año["CNO11"].apply(_cno_grupo).map(CNO_GRUPOS)
+        )
 
     return df_año
 
 
+def _tema_base(fig_size):
+    return theme_minimal() + theme(
+        figure_size=fig_size,
+        plot_title=element_text(size=13, face="bold"),
+        plot_subtitle=element_text(size=10, color="#555555"),
+        axis_text_y=element_text(size=9),
+        panel_grid_major_x=element_line(color="#dddddd", size=0.4),
+        panel_grid_major_y=element_blank(),
+        legend_position="bottom",
+    )
+
+
 # ══════════════════════════════════════════════════════════════════════════════
-# ASSET 1 — Barras apiladas: actividad × sexo × isla — Canarias, año configurable
+# ASSET 1 — Actividad económica × sexo
 # ══════════════════════════════════════════════════════════════════════════════
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_actividad_barras_canarias(context: AssetExecutionContext) -> None:
     """
-    Extiende plot_actividad_barras a toda Canarias usando los ficheros de
-    contratos históricos. Usa el último año anual completo disponible (2025).
+    Barras apiladas H/M por sector, filtradas según el ámbito configurado
+    en plot_config.yaml (Canarias, provincia o isla individual).
 
-    IDONEIDAD: variable nominal (sector) × nominal (sexo) × temporal (año).
-    Barras apiladas H/M por sector, facet por isla. Permite comparar la
-    composición de género del mercado laboral en cada isla simultáneamente.
+    Cuando ambito = "Canarias" o provincia → facet por isla.
+    Cuando ambito = isla individual        → barras directas sin facet.
 
     GESTALT:
       Similitud   — azul = hombres, rosa = mujeres, coherente con el proyecto.
-      Proximidad  — barras del mismo sector agrupadas por año dentro de cada isla.
+      Proximidad  — barras del mismo sector agrupadas dentro de cada isla.
       Cierre      — facet por isla como unidad perceptiva completa.
+      Continuidad — ordenación por volumen total (mayor arriba con coord_flip).
 
     DISEÑO:
-      Top 6 sectores por volumen (evita overplotting).
-      Escala Y libre por isla (tamaños de mercado muy distintos entre islas).
-      Sin panel "No consta" — categoría técnica sin valor narrativo.
+      Top N sectores configurables desde el YAML (recomendado 5-8).
+      Escala X libre por isla (tamaños de mercado distintos entre islas).
+      Sin "No consta" ni similares — categorías técnicas sin valor narrativo.
     """
-    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
-    AÑO      = 2025
+    cfg    = get_plot_config()["actividad_barras_canarias"]
+    AÑO    = cfg.get("ano", 2025)
+    AMBITO = cfg.get("ambito", "Canarias")
+    TOP_N  = cfg.get("top_n_actividades", 6)
 
-    df = _cargar_contratos_canarias(data_dir, AÑO)
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    df = _cargar_contratos(data_dir, AÑO)
     if df is None:
-        context.log.warning(f"No hay datos de contratos para {AÑO}. Asset omitido.")
+        context.log.warning(f"No hay datos de contratos para {AÑO}.")
         return
 
-    df = df[df["isla"] != "Desconocida"]
-
-    # Top 6 actividades por volumen total (excluir "No consta")
-    df_act = df[~df["Actividad económica"].str.lower().str.contains(
-        "no consta|sin clasificar", na=False)]
-    top_act = (df_act.groupby("Actividad económica")["c"]
-               .sum().nlargest(6).index.tolist())
-    df_act  = df_act[df_act["Actividad económica"].isin(top_act)]
-
-    # Abreviar nombres
-    ABREV = {
-        "Servicios de alojamiento":          "Alojamiento",
-        "Servicios de comidas y bebidas":    "Hostelería",
-        "Comercio al por menor":             "Comercio minorista",
-        "Actividades sanitarias":            "Sanidad",
-        "Construcción de edificios":         "Construcción",
-        "Actividades de construcción especializada": "Construcción esp.",
-        "Educación":                         "Educación",
-        "Administración pública y defensa; seguridad social obligatoria": "Adm. pública",
-    }
-    df_act["actividad"] = df_act["Actividad económica"].map(
-        lambda x: ABREV.get(x, x[:25]))
-
-    agg = (df_act.groupby(["isla", "actividad", "sexo"], as_index=False)["c"]
-           .sum())
-    agg["isla"] = pd.Categorical(agg["isla"], categories=ISLAS_ORDEN, ordered=True)
-
-    p = (
-        ggplot(agg, aes(x="actividad", y="c", fill="sexo"))
-        + geom_col(position="stack", width=0.7, alpha=0.9)
-        + facet_wrap("~ isla", scales="free_y", ncol=4)
-        + scale_fill_manual(
-            values={"Hombres": "#4A90D9", "Mujeres": "#D94A8C"}, name="Sexo")
-        + scale_y_continuous(labels=fmt_k)
-        + coord_flip()
-        + labs(
-            title=f"Actividad económica por sector y género — Canarias {AÑO}",
-            subtitle="Top 6 sectores por volumen de contratos · escala Y libre por isla",
-            x=None, y="Nº contratos",
-            caption="Fuente: OBECAN / SEPE",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(16, 10),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            strip_text=element_text(size=9, face="bold"),
-            axis_text_y=element_text(size=8),
-            panel_grid_major_x=element_line(color="#dddddd", size=0.4),
-            panel_grid_major_y=element_blank(),
-            legend_position="bottom",
-        )
+    df = _filtrar_ambito(df, AMBITO)
+    context.log.info(
+        f"Ámbito: {AMBITO} → {df['isla'].nunique()} isla(s), "
+        f"{df['c'].sum():,.0f} contratos"
     )
+
+    df = df[~df["Actividad económica"].str.lower().str.contains(
+        "no consta|sin clasificar", na=False)]
+
+    top_act = (df.groupby("Actividad económica")["c"]
+               .sum().nlargest(TOP_N).index.tolist())
+    df = df[df["Actividad económica"].isin(top_act)]
+
+    ABREV = {
+        "Servicios de alojamiento":   "Alojamiento",
+        "Servicios de comidas y bebidas": "Hostelería",
+        "Comercio al por menor, excepto de vehículos de motor y motocicletas":
+            "Comercio minorista",
+        "Actividades sanitarias":     "Sanidad",
+        "Construcción de edificios":  "Construcción",
+        "Actividades de construcción especializada": "Construcción esp.",
+        "Educación":                  "Educación",
+        "Administración pública y defensa; seguridad social obligatoria":
+            "Adm. pública",
+        "Servicios a edificios y actividades de jardinería":
+            "Servicios a edificios",
+    }
+    df["actividad"] = df["Actividad económica"].map(
+        lambda x: ABREV.get(x, x[:28]))
+
+    titulo = (f"Actividad económica por sector y género — "
+              f"{_titulo_ambito(AMBITO)}, {AÑO}")
+
+    es_isla_unica = AMBITO in ISLAS_VALIDAS
+
+    if es_isla_unica:
+        agg = df.groupby(["actividad","sexo"], as_index=False)["c"].sum()
+        p = (
+            ggplot(agg, aes(x="reorder(actividad, c)", y="c", fill="sexo"))
+            + geom_col(position="stack", width=0.7, alpha=0.9)
+            + scale_fill_manual(
+                values={"Hombres":"#4A90D9","Mujeres":"#D94A8C"}, name="Sexo")
+            + scale_y_continuous(labels=fmt_k)
+            + coord_flip()
+            + labs(title=titulo,
+                   subtitle=f"Top {TOP_N} sectores por volumen de contratos",
+                   x=None, y="Nº contratos",
+                   caption="Fuente: OBECAN / SEPE")
+            + _tema_base((11, 6))
+        )
+        fig_w, fig_h = 11, 6
+    else:
+        islas_ambito = _islas_en_ambito(AMBITO)
+        agg = df.groupby(["isla","actividad","sexo"], as_index=False)["c"].sum()
+        agg["isla"] = pd.Categorical(
+            agg["isla"], categories=islas_ambito, ordered=True)
+        ncol = min(len(islas_ambito), 4)
+        p = (
+            ggplot(agg, aes(x="reorder(actividad, c)", y="c", fill="sexo"))
+            + geom_col(position="stack", width=0.7, alpha=0.9)
+            + facet_wrap("~ isla", scales="free_x", ncol=ncol)
+            + scale_fill_manual(
+                values={"Hombres":"#4A90D9","Mujeres":"#D94A8C"}, name="Sexo")
+            + scale_y_continuous(labels=fmt_k)
+            + coord_flip()
+            + labs(title=titulo,
+                   subtitle=f"Top {TOP_N} sectores · escala X libre por isla",
+                   x=None, y="Nº contratos",
+                   caption="Fuente: OBECAN / SEPE")
+            + _tema_base((16, 10))
+            + theme(strip_text=element_text(size=9, face="bold"))
+        )
+        fig_w, fig_h = 16, 10
+
     out = os.path.join(get_plot_dir(), "actividad_barras_canarias.png")
-    p.save(out, width=16, height=10, dpi=150, verbose=False)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Actividad Canarias]({out})")})
+    p.save(out, width=fig_w, height=fig_h, dpi=150, verbose=False)
+    context.add_output_metadata({
+        "ambito": MetadataValue.text(AMBITO),
+        "año":    MetadataValue.int(AÑO),
+        "plot":   MetadataValue.md(f"![Actividad {AMBITO}]({out})"),
+    })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ASSET 2 — Divergente: brecha H-M por grupo CNO e isla — Canarias
+# ASSET 2 — Ocupación divergente por grupo CNO
 # ══════════════════════════════════════════════════════════════════════════════
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
     """
-    Extiende plot_ocupacion_divergente a toda Canarias usando grupos CNO-1
-    (primer dígito del código de ocupación) para agrupar las 481 ocupaciones
-    detalladas en 9 grandes grupos interpretables.
+    Barras divergentes H-M por grupo CNO-1, filtradas según el ámbito
+    configurado en plot_config.yaml.
 
-    IDONEIDAD: la diferencia H-M por grupo de ocupación es una magnitud real
-    con unidad (número de contratos). El gráfico divergente con eje en 0 es
-    la geometría canónica para mostrar qué grupos tienen mayoría masculina
-    o femenina.
+    Cuando ambito = "Canarias" o provincia → facet por isla.
+    Cuando ambito = isla individual        → barras directas sin facet.
 
     GESTALT:
       Simetría    — eje en 0 como punto de paridad visual.
       Similitud   — azul = mayoría hombres, rosa = mayoría mujeres.
-      Proximidad  — facet por isla para comparación interinsular.
-      Continuidad — barras ordenadas por brecha dentro de cada facet.
+      Proximidad  — facet por isla para comparación interinsular directa.
+      Continuidad — grupos ordenados por brecha global para coherencia visual
+                    entre islas (el lector no tiene que reaprender el orden).
 
     DISEÑO:
-      Facet por isla (7 paneles), escala X libre (tamaños distintos).
-      Grupos CNO ordenados por brecha global para coherencia visual entre islas.
-      Sin "No consta" ni grupos con n < 100 contratos.
+      9 grupos CNO-1 interpretables y coherentes con la clasificación INE/SEPE.
+      Filtro min_contratos desde YAML para excluir grupos con n irrelevante.
+      Escala X libre por isla — tamaños de mercado muy distintos entre islas.
     """
-    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
-    AÑO      = 2025
+    cfg    = get_plot_config()["ocupacion_divergente_canarias"]
+    AÑO    = cfg.get("ano", 2025)
+    AMBITO = cfg.get("ambito", "Canarias")
+    MIN_C  = cfg.get("min_contratos", 100)
 
-    df = _cargar_contratos_canarias(data_dir, AÑO)
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    df = _cargar_contratos(data_dir, AÑO)
     if df is None or "grupo_cno" not in df.columns:
-        context.log.warning("No hay datos CNO disponibles. Asset omitido.")
+        context.log.warning(f"No hay datos CNO para {AÑO}.")
         return
 
-    df = df[df["isla"] != "Desconocida"]
+    df = _filtrar_ambito(df, AMBITO)
     df = df.dropna(subset=["grupo_cno"])
-
-    # Pivot H/M por isla × grupo
-    pivot = (
-        df.groupby(["isla", "grupo_cno", "sexo"])["c"]
-        .sum().unstack("sexo").fillna(0).reset_index()
+    context.log.info(
+        f"Ámbito: {AMBITO} → {df['isla'].nunique()} isla(s), "
+        f"{df['c'].sum():,.0f} contratos"
     )
-    pivot.columns.name = None
-    pivot["brecha"]    = pivot.get("Hombres", 0) - pivot.get("Mujeres", 0)
-    pivot["total"]     = pivot.get("Hombres", 0) + pivot.get("Mujeres", 0)
-    pivot["direccion"] = pivot["brecha"].apply(
-        lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
 
-    # Filtrar grupos con masa insuficiente
-    pivot = pivot[pivot["total"] >= 100]
+    titulo = (f"Brecha de género por ocupación — "
+              f"{_titulo_ambito(AMBITO)}, {AÑO}")
 
-    # Orden global de grupos (por brecha agregada de toda Canarias)
-    orden_global = (
-        pivot.groupby("grupo_cno")["brecha"].sum()
-        .sort_values().index.tolist()
-    )
-    pivot["grupo_cno"] = pd.Categorical(
-        pivot["grupo_cno"], categories=orden_global, ordered=True)
-    pivot["isla"] = pd.Categorical(
-        pivot["isla"], categories=ISLAS_ORDEN, ordered=True)
+    es_isla_unica = AMBITO in ISLAS_VALIDAS
 
-    p = (
-        ggplot(pivot, aes(x="grupo_cno", y="brecha", fill="direccion"))
-        + geom_col(width=0.65, alpha=0.9)
-        + geom_hline(yintercept=0, linetype="dashed",
-                     color="#333333", size=0.5)
-        + facet_wrap("~ isla", scales="free_x", ncol=4)
-        + scale_fill_manual(
-            values={"Mayoría Hombres": "#4A90D9",
-                    "Mayoría Mujeres": "#D94A8C"},
-            name=None)
-        + scale_y_continuous(labels=fmt_k)
-        + coord_flip()
-        + labs(
-            title=f"Brecha de género por grupo ocupacional e isla — Canarias {AÑO}",
-            subtitle="Diferencia contratos (Hombres − Mujeres) · grupos CNO-1 · escala X libre por isla",
-            x=None, y="Diferencia (Hombres − Mujeres)",
-            caption="Fuente: OBECAN / SEPE",
+    if es_isla_unica:
+        pivot = (
+            df.groupby(["grupo_cno","sexo"])["c"]
+            .sum().unstack("sexo").fillna(0).reset_index()
         )
-        + theme_minimal()
-        + theme(
-            figure_size=(16, 10),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            strip_text=element_text(size=9, face="bold"),
-            axis_text_y=element_text(size=8),
-            panel_grid_major_x=element_line(color="#dddddd", size=0.4),
-            panel_grid_major_y=element_blank(),
-            legend_position="bottom",
+        pivot.columns.name = None
+        pivot["brecha"]    = pivot.get("Hombres",0) - pivot.get("Mujeres",0)
+        pivot["total"]     = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
+        pivot              = pivot[pivot["total"] >= MIN_C]
+        pivot["direccion"] = pivot["brecha"].apply(
+            lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
+
+        p = (
+            ggplot(pivot,
+                   aes(x="reorder(grupo_cno, brecha)", y="brecha",
+                       fill="direccion"))
+            + geom_col(width=0.65, alpha=0.9)
+            + geom_hline(yintercept=0, linetype="dashed",
+                         color="#333333", size=0.5)
+            + scale_fill_manual(
+                values={"Mayoría Hombres":"#4A90D9",
+                        "Mayoría Mujeres":"#D94A8C"}, name=None)
+            + scale_y_continuous(labels=fmt_k)
+            + coord_flip()
+            + labs(title=titulo,
+                   subtitle="Diferencia contratos (Hombres − Mujeres) · grupos CNO-1",
+                   x=None, y="Diferencia (Hombres − Mujeres)",
+                   caption="Fuente: OBECAN / SEPE")
+            + _tema_base((11, 6))
         )
-    )
+        fig_w, fig_h = 11, 6
+    else:
+        islas_ambito = _islas_en_ambito(AMBITO)
+        pivot = (
+            df.groupby(["isla","grupo_cno","sexo"])["c"]
+            .sum().unstack("sexo").fillna(0).reset_index()
+        )
+        pivot.columns.name = None
+        pivot["brecha"]    = pivot.get("Hombres",0) - pivot.get("Mujeres",0)
+        pivot["total"]     = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
+        pivot              = pivot[pivot["total"] >= MIN_C]
+        pivot["direccion"] = pivot["brecha"].apply(
+            lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
+
+        # Orden global: coherencia visual entre islas
+        orden = (pivot.groupby("grupo_cno")["brecha"].sum()
+                 .sort_values().index.tolist())
+        pivot["grupo_cno"] = pd.Categorical(
+            pivot["grupo_cno"], categories=orden, ordered=True)
+        pivot["isla"] = pd.Categorical(
+            pivot["isla"], categories=islas_ambito, ordered=True)
+
+        ncol = min(len(islas_ambito), 4)
+        p = (
+            ggplot(pivot,
+                   aes(x="grupo_cno", y="brecha", fill="direccion"))
+            + geom_col(width=0.65, alpha=0.9)
+            + geom_hline(yintercept=0, linetype="dashed",
+                         color="#333333", size=0.5)
+            + facet_wrap("~ isla", scales="free_x", ncol=ncol)
+            + scale_fill_manual(
+                values={"Mayoría Hombres":"#4A90D9",
+                        "Mayoría Mujeres":"#D94A8C"}, name=None)
+            + scale_y_continuous(labels=fmt_k)
+            + coord_flip()
+            + labs(title=titulo,
+                   subtitle="Diferencia (H − M) · grupos CNO-1 · escala X libre por isla",
+                   x=None, y="Diferencia (Hombres − Mujeres)",
+                   caption="Fuente: OBECAN / SEPE")
+            + _tema_base((16, 10))
+            + theme(strip_text=element_text(size=9, face="bold"))
+        )
+        fig_w, fig_h = 16, 10
+
     out = os.path.join(get_plot_dir(), "ocupacion_divergente_canarias.png")
-    p.save(out, width=16, height=10, dpi=150, verbose=False)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Ocupación Canarias]({out})")})
+    p.save(out, width=fig_w, height=fig_h, dpi=150, verbose=False)
+    context.add_output_metadata({
+        "ambito": MetadataValue.text(AMBITO),
+        "año":    MetadataValue.int(AÑO),
+        "plot":   MetadataValue.md(f"![Ocupación {AMBITO}]({out})"),
+    })
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CHECKS
 # ══════════════════════════════════════════════════════════════════════════════
 
-from dagster import asset_check, AssetCheckResult, AssetCheckSeverity
-
-
 @asset_check(
     asset=plot_actividad_barras_canarias,
     description=(
-        "Verifica que los ficheros de contratos 2025 existen, tienen las columnas "
-        "necesarias, cobertura de las 7 islas y actividades suficientes."
+        "Verifica ficheros del año configurado, cobertura del ámbito "
+        "seleccionado y actividades suficientes para el top-N."
     ),
 )
 def check_actividad_barras_canarias(context):
     """
-    Gestalt — Similitud: sin las 7 islas el facet presenta paneles vacíos que
-    el lector interpreta como islas sin actividad económica, no como datos faltantes.
-    Cierre: sin al menos 5 actividades no se puede construir un top-6 coherente.
+    Gestalt — Cierre [actividad_canarias]: sin las islas del ámbito el facet
+    presenta paneles vacíos que el lector interpreta como islas sin actividad.
+    Similitud: sin ambos sexos la paleta azul/rosa pierde coherencia.
     """
+    cfg    = get_plot_config()["actividad_barras_canarias"]
+    AÑO    = cfg.get("ano", 2025)
+    AMBITO = cfg.get("ambito", "Canarias")
+    TOP_N  = cfg.get("top_n_actividades", 6)
+
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
     passed   = True
-    md       = "### Check: actividad_barras_canarias\n\n"
+    md       = f"### Check: actividad_barras_canarias\n\n"
+    md      += (f"Configuración: `ano={AÑO}`, `ambito={AMBITO!r}`, "
+                f"`top_n={TOP_N}`\n\n")
 
-    df = _cargar_contratos_canarias(data_dir, 2025)
-
+    df = _cargar_contratos(data_dir, AÑO)
     if df is None:
         return AssetCheckResult(
-            passed=False,
-            severity=AssetCheckSeverity.WARN,
-            metadata={"check": MetadataValue.md("🔴 No hay ficheros de contratos 2025.")},
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md(
+                f"🔴 No hay ficheros de contratos para {AÑO}.")},
         )
 
-    # Columnas requeridas
-    for col in ["Actividad económica", "sexo", "c", "isla"]:
-        ok = col in df.columns
-        passed = passed and ok
-        md += f"- Columna `{col}`: {'🟢' if ok else '🔴'}\n"
+    try:
+        df_f = _filtrar_ambito(df, AMBITO)
+        md += f"- Ámbito `{AMBITO}` reconocido: 🟢\n"
+    except ValueError as e:
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.ERROR,
+            metadata={"check": MetadataValue.md(f"🔴 {e}")},
+        )
 
-    # Cobertura de islas
-    islas_ok  = set(df[df["isla"] != "Desconocida"]["isla"].unique())
-    faltantes = set(ISLAS_ORDEN) - islas_ok
+    islas_esp  = set(_islas_en_ambito(AMBITO))
+    islas_pres = set(df_f[df_f["isla"].isin(ISLAS_VALIDAS)]["isla"].unique())
+    faltantes  = islas_esp - islas_pres
     ok = len(faltantes) == 0
     passed = passed and ok
-    md += f"- 7 islas cubiertas: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
+    md += f"- Islas del ámbito: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
 
-    # Municipios sin isla
-    sin_isla = df[df["isla"] == "Desconocida"]["c"].sum()
-    pct_sin  = sin_isla / df["c"].sum() * 100
+    sin_isla = df_f[~df_f["isla"].isin(ISLAS_VALIDAS)]["c"].sum()
+    pct_sin  = sin_isla / df_f["c"].sum() * 100 if df_f["c"].sum() > 0 else 0
     ok = pct_sin < 5.0
     passed = passed and ok
-    md += f"- Municipios sin isla < 5%: {'🟢' if ok else '🔴'} ({pct_sin:.1f}%)\n"
+    md += f"- Sin isla < 5%: {'🟢' if ok else '🔴'} ({pct_sin:.1f}%)\n"
 
-    # Actividades suficientes
-    n_act = df["Actividad económica"].nunique()
-    ok = n_act >= 6
+    df_f2 = df_f[~df_f["Actividad económica"].str.lower().str.contains(
+        "no consta|sin clasificar", na=False)]
+    n_act = df_f2["Actividad económica"].nunique()
+    ok    = n_act >= TOP_N
     passed = passed and ok
-    md += f"- Actividades únicas ≥ 6: {'🟢' if ok else '🔴'} ({n_act})\n"
+    md += f"- Actividades ≥ {TOP_N}: {'🟢' if ok else '🔴'} ({n_act})\n"
 
-    # Ambos sexos presentes
-    sexos = set(df["sexo"].unique())
-    ok = {"Hombres", "Mujeres"}.issubset(sexos)
+    ok = {"Hombres","Mujeres"}.issubset(set(df_f["sexo"].unique()))
     passed = passed and ok
-    md += f"- Ambos sexos presentes: {'🟢' if ok else '🔴'}\n"
+    md += f"- Ambos sexos: {'🟢' if ok else '🔴'}\n"
 
     return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
         metadata={"check": MetadataValue.md(md)},
     )
 
@@ -401,72 +519,77 @@ def check_actividad_barras_canarias(context):
 @asset_check(
     asset=plot_ocupacion_divergente_canarias,
     description=(
-        "Verifica que los ficheros de contratos 2025 tienen CNO11 válido, "
-        "cobertura de islas y grupos CNO con masa suficiente."
+        "Verifica CNO11 válido, cobertura del ámbito y grupos con masa "
+        "suficiente según min_contratos configurado."
     ),
 )
 def check_ocupacion_divergente_canarias(context):
     """
-    Gestalt — Simetría: sin grupos con masa suficiente (n ≥ 100) el gráfico
-    divergente muestra barras de un solo píxel que rompen la lectura simétrica.
-    Figura/Fondo: un CNO11 malformado produce grupos None que aparecen como
-    barra sin etiqueta, contaminando la figura.
+    Gestalt — Simetría [ocupacion_canarias]: sin grupos con n ≥ min_contratos
+    el divergente muestra barras de un pixel que rompen la lectura simétrica.
+    Figura/Fondo: CNO11 malformado produce grupos None sin etiqueta.
     """
+    cfg    = get_plot_config()["ocupacion_divergente_canarias"]
+    AÑO    = cfg.get("ano", 2025)
+    AMBITO = cfg.get("ambito", "Canarias")
+    MIN_C  = cfg.get("min_contratos", 100)
+
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
     passed   = True
-    md       = "### Check: ocupacion_divergente_canarias\n\n"
+    md       = f"### Check: ocupacion_divergente_canarias\n\n"
+    md      += (f"Configuración: `ano={AÑO}`, `ambito={AMBITO!r}`, "
+                f"`min_contratos={MIN_C}`\n\n")
 
-    df = _cargar_contratos_canarias(data_dir, 2025)
-
+    df = _cargar_contratos(data_dir, AÑO)
     if df is None:
         return AssetCheckResult(
-            passed=False,
-            severity=AssetCheckSeverity.WARN,
-            metadata={"check": MetadataValue.md("🔴 No hay ficheros de contratos 2025.")},
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md(
+                f"🔴 No hay ficheros de contratos para {AÑO}.")},
         )
 
-    # CNO11 presente
-    ok = "CNO11" in df.columns
-    passed = passed and ok
-    md += f"- Columna `CNO11` presente: {'🟢' if ok else '🔴'}\n"
+    try:
+        df_f = _filtrar_ambito(df, AMBITO)
+        md += f"- Ámbito `{AMBITO}` reconocido: 🟢\n"
+    except ValueError as e:
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.ERROR,
+            metadata={"check": MetadataValue.md(f"🔴 {e}")},
+        )
 
-    if "grupo_cno" in df.columns:
-        # Grupos CNO válidos
-        n_sin_cno = int(df["grupo_cno"].isna().sum())
-        pct_sin   = n_sin_cno / len(df) * 100
+    ok = "CNO11" in df_f.columns
+    passed = passed and ok
+    md += f"- Columna `CNO11`: {'🟢' if ok else '🔴'}\n"
+
+    if "grupo_cno" in df_f.columns:
+        pct_sin = df_f["grupo_cno"].isna().mean() * 100
         ok = pct_sin < 10.0
         passed = passed and ok
-        md += f"- CNO sin grupo < 10%: {'🟢' if ok else '🔴'} ({pct_sin:.1f}%)\n"
+        md += f"- Sin grupo CNO < 10%: {'🟢' if ok else '🔴'} ({pct_sin:.1f}%)\n"
 
-        # Grupos únicos (esperamos 9 del CNO-1)
-        n_grupos = df["grupo_cno"].nunique()
+        n_grupos = df_f["grupo_cno"].nunique()
         ok = n_grupos >= 7
         passed = passed and ok
-        md += f"- Grupos CNO únicos ≥ 7: {'🟢' if ok else '🔴'} ({n_grupos})\n"
+        md += f"- Grupos CNO ≥ 7: {'🟢' if ok else '🔴'} ({n_grupos})\n"
 
-        # Masa mínima por grupo e isla
-        pivot = (
-            df[df["isla"] != "Desconocida"]
-            .groupby(["isla", "grupo_cno"])["c"]
-            .sum().reset_index()
-        )
-        grupos_escasos = pivot[pivot["c"] < 100]
-        ok = len(grupos_escasos) < 5
-        passed = passed and ok
-        md += (
-            f"- Grupos con n < 100: {'🟢' if ok else '⚠️'}"
-            f" ({len(grupos_escasos)} combinaciones isla×grupo)\n"
-        )
+    pivot = (
+        df_f[df_f["isla"].isin(ISLAS_VALIDAS)]
+        .groupby(["isla","grupo_cno"])["c"].sum().reset_index()
+    )
+    escasos = pivot[pivot["c"] < MIN_C]
+    ok = len(escasos) < 5
+    passed = passed and ok
+    md += (f"- Grupos con n < {MIN_C}: "
+           f"{'🟢' if ok else '⚠️'} ({len(escasos)} combis isla×grupo)\n")
 
-    # Cobertura islas
-    islas_ok  = set(df[df["isla"] != "Desconocida"]["isla"].unique())
-    faltantes = set(ISLAS_ORDEN) - islas_ok
+    islas_esp  = set(_islas_en_ambito(AMBITO))
+    islas_pres = set(df_f[df_f["isla"].isin(ISLAS_VALIDAS)]["isla"].unique())
+    faltantes  = islas_esp - islas_pres
     ok = len(faltantes) == 0
     passed = passed and ok
-    md += f"- 7 islas cubiertas: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
+    md += f"- Islas del ámbito: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
 
     return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
         metadata={"check": MetadataValue.md(md)},
     )
