@@ -1172,13 +1172,6 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
                         ax.scatter(i_pt, vals[i_pt], s=55,
                                    color=COLORS[sexo], zorder=5,
                                    edgecolors="white", linewidths=0.8)
-                        if i_pt == AÑOS.index(2025):
-                            offset = 1.2 if sexo == "Mujeres" else -1.2
-                            va     = "bottom" if sexo == "Mujeres" else "top"
-                            ax.text(i_pt + 0.1, vals[i_pt] + offset,
-                                    f"{vals[i_pt]:.0f}%",
-                                    fontsize=8.5, color=COLORS[sexo],
-                                    fontweight="bold", va=va, ha="left")
 
                 # 2026 — diamante semitransparente
                 i26 = AÑOS.index(2026)
