@@ -1709,7 +1709,7 @@ def check_datos_brecha_temporal_edad(context):
 @asset_check(
     asset=plot_mapa_brecha_salarial_canarias,
     description=(
-        "Verifica contratos 2023, rentas 2023, GeoJSON canarias2026.geojson, "
+        "Verifica contratos 2023, rentas 2023, GeoJSON municipios2023.json, "
         "cobertura ≥ 80 municipios y TwoSlopeNorm viable."
     ),
 )
