@@ -3,6 +3,7 @@ import glob
 import time
 import pandas as pd
 import geopandas as gpd
+import config
 from dagster import asset_check, AssetCheckResult, MetadataValue, AssetCheckSeverity
 from assets import preprocesar_datos_p5, commitear_plots_a_github
 from plots_assets import (
@@ -23,8 +24,11 @@ from plots_assets import (
     plot_covid_prestaciones_islas,
     plot_brecha_temporal_edad,
     plot_historico_tipos_contrato_por_edad,
+    plot_mapa_brecha_salarial_canarias,
     ISLAS_ORDEN,
     COLORES_ISLA,
+    _load_rentas,
+    _load_gini,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1395,8 +1399,6 @@ def check_datos_brecha_islas(context):
     description="Precondiciones para el gráfico de histórico de contratos.",
 )
 def check_datos_historico_contratos(context):
-    import os, glob
-    import config
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
     
     files_23 = glob.glob(os.path.join(data_dir, "2023", "*.csv"))
@@ -1416,3 +1418,372 @@ def check_datos_historico_contratos(context):
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Historico_Contratos": MetadataValue.md(report_md)},
     )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# CHECKS FALTANTES — assets sin cobertura
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+@asset_check(
+    asset=plot_heatmap_segregacion_sectorial,
+    description=(
+        "Verifica que contratos_202603.csv tiene las 7 islas, ambos sexos, "
+        "top-12 actividades con masa suficiente y TwoSlopeNorm viable."
+    ),
+)
+def check_datos_heatmap_segregacion(context):
+    """
+    Gestalt — Similitud [heatmap]: TwoSlopeNorm centrada en 0.5 requiere
+    que haya celdas por encima y por debajo de la paridad. Si todos los
+    ratios son > 0.5 el gradiente se aplana en el extremo rojo y el lector
+    no puede distinguir sectores con distinto grado de masculinización.
+
+    Gestalt — Proximidad [heatmap]: las 7 islas deben estar presentes para
+    que la lectura izquierda→derecha (oeste→este) tenga sentido geográfico.
+    Un panel vacío se interpreta como "isla sin actividad", no como dato faltante.
+
+    Gestalt — Cierre [heatmap]: cada celda es una unidad perceptiva completa.
+    Con n < 10 contratos el ratio H/M es inestable (un contrato cambia 10 pp)
+    y la celda miente al lector.
+    """
+    passed   = True
+    report_md = "### Check: heatmap_segregacion_sectorial\n\n"
+
+    fpath = get_processed_path("contratos_202603.csv")
+    if not os.path.exists(fpath):
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md("🔴 contratos_202603.csv no encontrado.")})
+
+    df = pd.read_csv(fpath)
+    df.columns = df.columns.str.strip()
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].str.strip()
+
+    # Ambos sexos
+    sexos = set(df["sexo"].dropna().unique())
+    ok    = {"Hombres","Mujeres"}.issubset(sexos)
+    passed = passed and ok
+    report_md += f"- Ambos sexos: {'🟢' if ok else '🔴'}\n"
+
+    # 7 islas
+    ISLAS_ESPERADAS = {"EL HIERRO","LA GOMERA","LA PALMA","TENERIFE",
+                       "GRAN CANARIA","LANZAROTE","FUERTEVENTURA"}
+    islas_datos = set(df["isla"].dropna().str.upper().unique())
+    faltantes   = ISLAS_ESPERADAS - islas_datos
+    ok = len(faltantes) == 0
+    passed = passed and ok
+    report_md += f"- 7 islas presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
+
+    # Top-12 actividades con masa suficiente (n ≥ 10 por celda isla×sexo)
+    top_act = (df.groupby("Actividad económica")["Contratos"]
+               .sum().nlargest(12).index.tolist())
+    pivot = (df[df["Actividad económica"].isin(top_act)]
+             .groupby(["Actividad económica","isla","sexo"])["Contratos"]
+             .sum().unstack("sexo").fillna(0))
+    pivot["ratio"] = pivot.get("Hombres",0) / (
+        pivot.get("Hombres",0) + pivot.get("Mujeres",0) + 1e-9)
+    celdas_escasas = int(((pivot.get("Hombres",0) + pivot.get("Mujeres",0)) < 10).sum())
+    ok = celdas_escasas < 5
+    passed = passed and ok
+    report_md += f"- Celdas con n < 10: {'🟢' if ok else '⚠️'} ({celdas_escasas})\n"
+
+    # TwoSlopeNorm viable: ratios por encima y por debajo de 0.5
+    ok = bool((pivot["ratio"] > 0.5).any()) and bool((pivot["ratio"] < 0.5).any())
+    passed = passed and ok
+    report_md += f"- Ratios por encima y debajo de 0.5 (TwoSlopeNorm): {'🟢' if ok else '🔴'}\n"
+
+    return AssetCheckResult(
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
+        metadata={"check": MetadataValue.md(report_md)})
+
+
+@asset_check(
+    asset=plot_covid_sueldos_islas,
+    description=(
+        "Verifica que rentas.csv tiene 'Sueldos y salarios' para las 7 islas "
+        "en 2015-2023 sin saltos, y que el rango es coherente [40, 80]."
+    ),
+)
+def check_datos_covid_sueldos(context):
+    """
+    Gestalt — Continuidad [covid_sueldos]: un salto temporal en la serie de
+    sueldos produce una pendiente artificial. La línea conecta puntos no
+    consecutivos y el lector infiere una caída brusca que no ocurrió.
+
+    Gestalt — Figura/Fondo [covid_sueldos]: el área COVID (axvspan 2019.5-2021.5)
+    debe contener el punto mínimo de las islas turísticas para que la narrativa
+    "COVID causó la caída" sea visualmente coherente. Si el mínimo está fuera
+    del área, el fondo no explica la figura.
+    """
+    passed   = True
+    report_md = "### Check: covid_sueldos_islas\n\n"
+
+    rentas = _load_rentas()
+    sub    = rentas[rentas["MEDIDAS"] == "Sueldos y salarios"]
+
+    if sub.empty:
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md("🔴 'Sueldos y salarios' no encontrado en rentas.csv.")})
+
+    # Años completos 2015-2023
+    AÑOS_ESP = set(range(2015, 2024))
+    años_ok  = set(sub["TIME_PERIOD"].dropna().unique())
+    ok = AÑOS_ESP.issubset(años_ok)
+    passed = passed and ok
+    report_md += f"- Años 2015-2023: {'🟢' if ok else '🔴'} ({sorted(años_ok)})\n"
+
+    # Sin saltos por isla turística
+    for isla in ["Tenerife","Fuerteventura","Lanzarote"]:
+        años = sorted(sub[sub["TERRITORIO"]==isla]["TIME_PERIOD"].unique())
+        if len(años) > 1:
+            saltos = [años[i+1]-años[i] for i in range(len(años)-1)]
+            if any(s > 1 for s in saltos):
+                passed = False
+                report_md += f"- Salto temporal `{isla}`: 🔴 {años}\n"
+            else:
+                report_md += f"- Serie `{isla}` continua: 🟢\n"
+
+    # Rango coherente [40, 80]
+    vmin, vmax = float(sub["OBS_VALUE"].min()), float(sub["OBS_VALUE"].max())
+    ok = (vmin >= 40) and (vmax <= 80)
+    passed = passed and ok
+    report_md += f"- Rango OBS_VALUE ∈ [40, 80]: {'🟢' if ok else '🔴'} [{vmin:.1f}, {vmax:.1f}]\n"
+
+    # El mínimo de islas turísticas cae dentro del área COVID (2020-2021)
+    turisticas = sub[sub["TERRITORIO"].isin(["Tenerife","Fuerteventura","Lanzarote"])]
+    año_min    = int(turisticas.loc[turisticas["OBS_VALUE"].idxmin(), "TIME_PERIOD"])
+    ok = año_min in (2020, 2021)
+    passed = passed and ok
+    report_md += f"- Mínimo turísticas dentro del área COVID: {'🟢' if ok else '⚠️'} (año {año_min})\n"
+
+    return AssetCheckResult(
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
+        metadata={"check": MetadataValue.md(report_md)})
+
+
+@asset_check(
+    asset=plot_covid_prestaciones_islas,
+    description=(
+        "Verifica que rentas.csv tiene 'Prestaciones por desempleo' para las "
+        "7 islas en 2015-2023, que el pico está en 2020 y el rango es [0, 30]."
+    ),
+)
+def check_datos_covid_prestaciones(context):
+    """
+    Gestalt — Figura/Fondo [covid_prestaciones]: el pico de prestaciones debe
+    estar en 2020 (dentro del área COVID). Si el máximo histórico está fuera
+    de 2020-2021, el área rosa deja de ser el fondo explicativo de la figura
+    y la narrativa "COVID causó el pico" pierde coherencia visual.
+
+    Gestalt — Continuidad [covid_prestaciones]: igual que sueldos — sin
+    los 9 años completos la línea conecta puntos no consecutivos.
+    """
+    passed   = True
+    report_md = "### Check: covid_prestaciones_islas\n\n"
+
+    rentas = _load_rentas()
+    sub    = rentas[rentas["MEDIDAS"] == "Prestaciones por desempleo"]
+
+    if sub.empty:
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md("🔴 'Prestaciones por desempleo' no encontrado.")})
+
+    # Años completos
+    AÑOS_ESP = set(range(2015, 2024))
+    años_ok  = set(sub["TIME_PERIOD"].dropna().unique())
+    ok = AÑOS_ESP.issubset(años_ok)
+    passed = passed and ok
+    report_md += f"- Años 2015-2023: {'🟢' if ok else '🔴'} ({sorted(años_ok)})\n"
+
+    # El pico de islas turísticas está en 2020 o 2021
+    turisticas = sub[sub["TERRITORIO"].isin(["Tenerife","Fuerteventura","Lanzarote"])]
+    año_max    = int(turisticas.loc[turisticas["OBS_VALUE"].idxmax(), "TIME_PERIOD"])
+    ok = año_max in (2020, 2021)
+    passed = passed and ok
+    report_md += f"- Pico turísticas dentro COVID: {'🟢' if ok else '⚠️'} (año {año_max})\n"
+
+    # Rango coherente [0, 30]
+    vmin, vmax = float(sub["OBS_VALUE"].min()), float(sub["OBS_VALUE"].max())
+    ok = (vmin >= 0) and (vmax <= 30)
+    passed = passed and ok
+    report_md += f"- Rango OBS_VALUE ∈ [0, 30]: {'🟢' if ok else '🔴'} [{vmin:.1f}, {vmax:.1f}]\n"
+
+    return AssetCheckResult(
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
+        metadata={"check": MetadataValue.md(report_md)})
+
+
+@asset_check(
+    asset=plot_brecha_temporal_edad,
+    description=(
+        "Verifica que contratos_202603.csv tiene los 4 tipos de contrato, "
+        "las 3 franjas de edad, ambos sexos y el ámbito configurado."
+    ),
+)
+def check_datos_brecha_temporal_edad(context):
+    """
+    Gestalt — Proximidad [brecha_temporal_edad]: las barras H/M del mismo
+    tipo de contrato deben estar adyacentes. Si falta un sexo en algún tipo,
+    la barra de ese lado desaparece y el lector interpreta paridad donde hay
+    ausencia de dato — el peor error posible en un gráfico de brecha.
+
+    Gestalt — Similitud [brecha_temporal_edad]: las etiquetas de porcentaje
+    solo aparecen cuando la barra supera el 4%. Con barras de <4% sin etiqueta
+    el lector asume que son barras vacías — se pierde la información de que
+    la Conversión existe pero es pequeña.
+
+    Diseño — escala compartida (sharey=True): si una franja de edad tiene
+    valores extremos que otra no tiene, la escala compartida aplasta las
+    diferencias en las otras franjas. El check verifica que el rango de
+    porcentajes es similar entre grupos de edad.
+    """
+    cfg      = get_plot_config().get("brecha_temporal_edad", {})
+    ISLA     = cfg.get("isla", "Todas")
+    passed   = True
+    report_md = f"### Check: brecha_temporal_edad (isla={ISLA!r})\n\n"
+
+    fpath = get_processed_path("contratos_202603.csv")
+    if not os.path.exists(fpath):
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md("🔴 contratos_202603.csv no encontrado.")})
+
+    df = pd.read_csv(fpath)
+    df.columns = df.columns.str.strip()
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].str.strip()
+    df = df[df["sexo"].isin(["Hombres","Mujeres"])]
+
+    if ISLA != "Todas":
+        df = df[df["isla"].str.upper() == ISLA.upper()]
+        ok = len(df) > 0
+        passed = passed and ok
+        report_md += f"- Isla `{ISLA}` con datos: {'🟢' if ok else '🔴'}\n"
+
+    # Ambos sexos
+    ok = {"Hombres","Mujeres"}.issubset(set(df["sexo"].unique()))
+    passed = passed and ok
+    report_md += f"- Ambos sexos: {'🟢' if ok else '🔴'}\n"
+
+    # 4 tipos de contrato
+    TC_MAP = {"Indefinido","Temporal Tiempo Completo",
+              "Temporal Tiempo Parcial","Conversión a Indefinido"}
+    tipos_ok = TC_MAP & set(df["Tipo Contrato"].dropna().unique())
+    ok = len(tipos_ok) == 4
+    passed = passed and ok
+    report_md += f"- 4 tipos de contrato: {'🟢' if ok else '🔴'} ({len(tipos_ok)}/4)\n"
+
+    # 3 franjas de edad
+    edades_ok = {"Menor de 25","Entre 25 y 44","45 o más"} & \
+                set(df["edad"].dropna().unique())
+    ok = len(edades_ok) == 3
+    passed = passed and ok
+    report_md += f"- 3 franjas de edad: {'🟢' if ok else '🔴'} ({len(edades_ok)}/3)\n"
+
+    # Rango porcentajes similar entre edades (sharey=True es válido)
+    TC_RENAME = {"Indefinido":"Indefinido","Temporal Tiempo Completo":"Temp. Completo",
+                 "Temporal Tiempo Parcial":"Temp. Parcial",
+                 "Conversión a Indefinido":"Conversión"}
+    df["tc"] = df["Tipo Contrato"].map(TC_RENAME)
+    agg = df.groupby(["edad","tc","sexo"])["Contratos"].sum().reset_index()
+    totales = agg.groupby(["edad","sexo"])["Contratos"].sum().reset_index(name="total")
+    agg = agg.merge(totales, on=["edad","sexo"])
+    agg["pct"] = agg["Contratos"] / agg["total"] * 100
+    rango_por_edad = agg.groupby("edad")["pct"].max()
+    if len(rango_por_edad) > 1:
+        ratio_rangos = rango_por_edad.max() / rango_por_edad.min()
+        ok = ratio_rangos < 2.0
+        passed = passed and ok
+        report_md += (f"- Escala compartida coherente (ratio rangos < 2): "
+                      f"{'🟢' if ok else '⚠️'} ({ratio_rangos:.1f}×)\n")
+
+    return AssetCheckResult(
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
+        metadata={"check": MetadataValue.md(report_md)})
+
+
+@asset_check(
+    asset=plot_mapa_brecha_salarial_canarias,
+    description=(
+        "Verifica contratos 2023, rentas 2023, GeoJSON canarias2026.geojson, "
+        "cobertura ≥ 80 municipios y TwoSlopeNorm viable."
+    ),
+)
+def check_datos_mapa_brecha_canarias(context):
+    """
+    Gestalt — Similitud [mapa_brecha_canarias]: TwoSlopeNorm centrada en 0
+    requiere valores positivos y negativos. Si todos los municipios tienen
+    índice > 0 el mapa se vuelve monocromo rojo y el lector no puede
+    distinguir intensidades — la escala divergente pierde su razón de ser.
+
+    Gestalt — Cierre [mapa_brecha_canarias]: con menos de 80/88 municipios
+    con dato, los grises se perciben como "zona sin brecha" en lugar de
+    "dato faltante". El umbral del 90% evita este error de interpretación.
+
+    Gestalt — Figura/Fondo [mapa_brecha_canarias]: el percentil 95 como
+    límite de la escala evita que outliers extremos aplanen el gradiente
+    del resto del territorio, haciendo que la mayoría parezca neutra.
+    """
+    passed   = True
+    report_md = "### Check: mapa_brecha_salarial_canarias\n\n"
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+
+    # GeoJSON
+    geojson = os.path.join(data_dir, "canarias2026.geojson")
+    ok = os.path.exists(geojson)
+    passed = passed and ok
+    report_md += f"- canarias2026.geojson: {'🟢' if ok else '🔴'}\n"
+
+    if ok:
+        try:
+            gdf_test = gpd.read_file(geojson)
+            ok2 = len(gdf_test) >= 80
+            passed = passed and ok2
+            report_md += f"- GeoJSON ≥ 80 polígonos: {'🟢' if ok2 else '🔴'} ({len(gdf_test)})\n"
+        except Exception as e:
+            passed = False
+            report_md += f"- Error leyendo GeoJSON: 🔴 {e}\n"
+
+    # Contratos 2023
+    paths_2023 = glob.glob(
+        os.path.join(data_dir, "2023", "contratos_registrados_*.csv"))
+    ok = len(paths_2023) >= 12
+    passed = passed and ok
+    report_md += f"- Ficheros contratos 2023 ≥ 12: {'🟢' if ok else '🔴'} ({len(paths_2023)})\n"
+
+    # Rentas 2023
+    rentas = _load_rentas()
+    sal_2023 = rentas[(rentas["MEDIDAS"]=="Sueldos y salarios") &
+                      (rentas["TIME_PERIOD"]==2023)]
+    ok = len(sal_2023) > 0
+    passed = passed and ok
+    report_md += f"- Rentas 2023 disponibles: {'🟢' if ok else '🔴'} ({len(sal_2023)} municipios)\n"
+
+    # TwoSlopeNorm viable (estimación rápida con muestra)
+    if len(paths_2023) > 0 and len(sal_2023) > 0:
+        try:
+            def _ds(p):
+                with open(p,'r',encoding='utf-8',errors='ignore') as f: l=f.readline()
+                return ";" if l.count(";")>l.count(",") else ","
+            df_s = pd.read_csv(paths_2023[0], sep=_ds(paths_2023[0]),
+                               dtype={"Contratos":float})
+            df_s.columns = df_s.columns.str.strip()
+            df_s = df_s.rename(columns={"Contratos":"c"})
+            df_s = df_s[df_s["sexo"].isin(["Hombres","Mujeres"])]
+            ratio_s = (df_s.groupby(["Municipio","sexo"])["c"]
+                       .sum().unstack("sexo").fillna(0))
+            ratio_s["r"] = ratio_s.get("Hombres",0)/(
+                ratio_s.get("Hombres",0)+ratio_s.get("Mujeres",0)+1e-9)
+            ok = bool((ratio_s["r"]>0.5).any()) and bool((ratio_s["r"]<0.5).any())
+            passed = passed and ok
+            report_md += f"- TwoSlopeNorm viable (muestra 1 mes): {'🟢' if ok else '⚠️'}\n"
+        except Exception as e:
+            report_md += f"- TwoSlopeNorm: ⚠️ no verificado ({e})\n"
+
+    return AssetCheckResult(
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
+        metadata={"check": MetadataValue.md(report_md)})

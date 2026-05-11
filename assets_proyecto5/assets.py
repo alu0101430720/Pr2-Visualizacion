@@ -182,6 +182,7 @@ def preprocesar_datos_p5() -> str:
         "plot_historico_tipos_contrato_por_edad",
         "plot_actividad_barras_canarias",
         "plot_ocupacion_divergente_canarias",
+        "plot_mapa_brecha_salarial_canarias",
     ],
     group_name="publicacion",
     description=(

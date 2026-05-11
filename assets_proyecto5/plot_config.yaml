@@ -4,7 +4,7 @@
 
 # ── Paleta global ─────────────────────────────────────────────────────────────
 # USO 1 — Identidad de género (barras apiladas, líneas, histogramas):
-#   color_hombres / color_mujeres identifican la serie, no emiten juicio.
+#   color_hombres / color_mujeres identifican la serie.
 #
 # USO 2 — Dirección de la brecha (mapa coroplético, slope chart):
 #   color_brecha_favorable_hombres / color_brecha_favorable_mujeres.

@@ -516,7 +516,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     # Eje Y
     _aplicar_eje_y(ax,
                    y_min_data=float(df["OBS_VALUE"].min()),
-                   y_max_data=float(df["OBS_VALUE"].max()),
+                   y_max_data=float(df["OBS_VALUE"].max()) + 5,
                    empezar_en_cero=empezar_en_cero)
 
     ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 1.5)
@@ -1071,4 +1071,174 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
     context.add_output_metadata({
         "plots": MetadataValue.md(
             "\n".join(f"- `{os.path.basename(p)}`" for p in output_paths))
+    })
+
+
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_mapa_brecha_salarial_canarias(context: AssetExecutionContext) -> None:
+    """
+    Mapa coroplético del índice de brecha salarial por municipio — Toda Canarias.
+    Usa contratos 2023 (flujo anual completo) × rentas 2023 del mismo año,
+    evitando el cruce temporal imperfecto del boxplot (contratos mar 2026 × rentas 2023).
+    GeoJSON: canarias2026.geojson (88 municipios).
+
+    GESTALT:
+      Similitud   — RdBu_r divergente centrado en 0: rojo = favorable a hombres,
+                    azul = favorable a mujeres, blanco = paridad.
+      Proximidad  — municipios vecinos se comparan sin esfuerzo cognitivo.
+      Cierre      — polígonos municipales como unidades perceptivas completas.
+      Figura/Fondo — grises para municipios sin dato (sin datos suficientes).
+
+    DISEÑO:
+      TwoSlopeNorm centrada en 0. Límite de escala en percentil 95 para que
+      outliers extremos no aplanen el gradiente del resto del territorio.
+      Misma paleta que plot_mapa_brecha_salarial (Tenerife) para coherencia.
+      Fuente explícita: contratos SEPE 2023 × rentas ISTAC 2023 (mismo año).
+    """
+    import re
+    import glob
+    import unicodedata
+
+    pal  = get_paleta()
+    cmap = pal["cmap_brecha"]
+
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    geojson  = os.path.join(data_dir, "canarias2026.geojson")
+
+    if not os.path.exists(geojson):
+        context.log.warning(f"GeoJSON no encontrado: {geojson}")
+        return
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+    def _detect_sep(p):
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            l = f.readline()
+        return ";" if l.count(";") > l.count(",") else ","
+
+    def _fix_articulo(s):
+        m = re.match(r"^(.+),\s*(La|El|Los|Las)$", str(s).strip(), re.IGNORECASE)
+        return f"{m.group(2)} {m.group(1)}" if m else s.strip()
+
+    def _norm(s):
+        return (unicodedata.normalize("NFD", str(s).strip().upper())
+                .encode("ascii", "ignore").decode())
+
+    MANUAL = {
+        "ALDEA DE SAN NICOLAS, LA":            "LA ALDEA DE SAN NICOLAS",
+        "FUENCALIENTE DE LA PALMA":            "FUENCALIENTE",
+        "GUANCHA, LA":                         "LA GUANCHA",
+        "LLANOS DE ARIDANE, LOS":              "LOS LLANOS DE ARIDANE",
+        "MATANZA DE ACENTEJO, LA":             "LA MATANZA DE ACENTEJO",
+        "OLIVA, LA":                           "LA OLIVA",
+        "OROTAVA, LA":                         "LA OROTAVA",
+        "PALMAS DE GRAN CANARIA, LAS":         "LAS PALMAS DE GRAN CANARIA",
+        "PASO, EL":                            "EL PASO",
+        "PINAR DE EL HIERRO, EL":             "EL PINAR",
+        "REALEJOS, LOS":                       "LOS REALEJOS",
+        "ROSARIO, EL":                         "EL ROSARIO",
+        "SAN CRISTOBAL DE LA LAGUNA":          "LA LAGUNA",
+        "SANTA MARIA DE GUIA DE GRAN CANARIA": "SANTA MARIA DE GUIA",
+        "SAUZAL, EL":                          "EL SAUZAL",
+        "SILOS, LOS":                          "LOS SILOS",
+        "TANQUE, EL":                          "EL TANQUE",
+        "VALSEQUILLO DE GRAN CANARIA":         "VALSEQUILLO",
+        "VICTORIA DE ACENTEJO, LA":            "LA VICTORIA DE ACENTEJO",
+        "VILAFLOR DE CHASNA":                  "VILAFLOR",
+    }
+
+    # ── Cargar contratos 2023 ─────────────────────────────────────────────────
+    paths_2023 = sorted(glob.glob(
+        os.path.join(data_dir, "2023", "contratos_registrados_*.csv")))
+    if not paths_2023:
+        context.log.warning("No hay ficheros de contratos 2023.")
+        return
+
+    dfs = []
+    for p in paths_2023:
+        df = pd.read_csv(p, sep=_detect_sep(p), dtype={"Contratos": float})
+        df.columns = df.columns.str.strip()
+        df = df.rename(columns={"Contratos": "c"})
+        for col in df.select_dtypes(include="object").columns:
+            df[col] = df[col].str.strip()
+        if "Municipio" in df.columns:
+            df["Municipio"] = df["Municipio"].apply(_fix_articulo)
+        dfs.append(df[df["sexo"].isin(["Hombres", "Mujeres"])])
+
+    df23 = pd.concat(dfs, ignore_index=True)
+
+    ratio = (df23.groupby(["Municipio", "sexo"])["c"]
+             .sum().unstack("sexo").fillna(0).reset_index())
+    ratio.columns.name = None
+    ratio["ratio_hm"] = ratio["Hombres"] / (ratio["Hombres"] + ratio["Mujeres"])
+
+    # ── Cargar rentas 2023 ────────────────────────────────────────────────────
+    rentas = _load_rentas()
+    sal = (rentas[(rentas["MEDIDAS"] == "Sueldos y salarios") &
+                  (rentas["TIME_PERIOD"] == 2023)]
+           [["TERRITORIO", "OBS_VALUE"]]
+           .rename(columns={"TERRITORIO": "Municipio",
+                             "OBS_VALUE":  "pct_salarios"}))
+
+    merged = ratio.merge(sal, on="Municipio", how="inner")
+    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    merged["mun_norm"] = merged["Municipio"].apply(_norm)
+    merged["mun_norm"] = merged["mun_norm"].replace(
+        {_norm(k): _norm(v) for k, v in MANUAL.items()})
+
+    context.log.info(
+        f"Municipios con dato: {len(merged)} · "
+        f"rango [{merged['indice_brecha'].min():.2f}, "
+        f"{merged['indice_brecha'].max():.2f}]")
+
+    # ── GeoJSON ───────────────────────────────────────────────────────────────
+    gdf = gpd.read_file(geojson)
+    gdf["nombre_norm"] = gdf["nombre"].apply(_norm)
+    gdf = gdf.merge(merged[["mun_norm", "indice_brecha"]],
+                    left_on="nombre_norm", right_on="mun_norm", how="left")
+
+    n_ok = int(gdf["indice_brecha"].notna().sum())
+    context.log.info(f"Join GeoJSON: {n_ok}/88 municipios")
+
+    # ── Mapa ──────────────────────────────────────────────────────────────────
+    lim      = float(np.percentile(merged["indice_brecha"].abs(), 95))
+    norm_col = mcolors.TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
+
+    fig, ax = plt.subplots(figsize=(14, 9))
+    fig.patch.set_facecolor("white")
+
+    gdf.plot(
+        column="indice_brecha", cmap=cmap, norm=norm_col,
+        linewidth=0.3, edgecolor="white",
+        missing_kwds={"color": "#dddddd", "label": "Sin datos"},
+        legend=False, ax=ax)
+
+    sm = ScalarMappable(cmap=cmap, norm=norm_col)
+    sm.set_array([])
+    cb = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
+    cb.set_label(
+        "Índice de brecha salarial\n"
+        "(+ = favorable a hombres  /  − = favorable a mujeres)",
+        fontsize=9)
+
+    ax.set_title(
+        "Brecha salarial de género por municipio — Canarias 2023",
+        fontsize=14, fontweight="bold", pad=12)
+    ax.annotate(
+        "Índice = ratio H/(H+M) contratos × % sueldos sobre renta · "
+        "Rojo = favorable hombres · Azul = favorable mujeres · Gris = sin datos",
+        xy=(0.01, 0.98), xycoords="axes fraction",
+        fontsize=8.5, color="#555555", va="top")
+    ax.axis("off")
+    fig.text(0.99, 0.01,
+             "Fuente: SEPE / ISTAC — Contratos 2023 × Rentas 2023",
+             ha="right", fontsize=8, color="#888888")
+
+    plt.tight_layout()
+    out = os.path.join(get_plot_dir(), "mapa_brecha_salarial_canarias.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+    context.add_output_metadata({
+        "municipios_con_dato": MetadataValue.int(n_ok),
+        "plot": MetadataValue.md(f"![Mapa Brecha Canarias]({out})"),
     })
