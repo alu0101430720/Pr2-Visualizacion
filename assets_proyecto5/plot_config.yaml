@@ -59,13 +59,13 @@ brecha_temporal_edad:
 # ── Control eje Y: true = desde 0 / false = truncado con símbolo // ──────────
 
 covid_sueldos_islas:
-  empezar_en_cero: false
+  empezar_en_cero: true
 
 covid_prestaciones_islas:
-  empezar_en_cero: false
+  empezar_en_cero: true
 
 gini_evolucion_islas:
-  empezar_en_cero: false
+  empezar_en_cero: true
 
 # ── Assets contratos históricos (toda Canarias) ───────────────────────────────
 # ambito: "Canarias" | "SC Tenerife" | "Las Palmas" | nombre de isla
@@ -78,6 +78,6 @@ actividad_barras_canarias:
 
 ocupacion_divergente_canarias:
   ano: 2025
-  ambito: "Tenerife"
+  ambito: "Canarias"
   min_contratos: 100
-  agregar_islas: false   # true = gráfico único agregado sin facet
+  agregar_islas: true   # true = gráfico único agregado sin facet
