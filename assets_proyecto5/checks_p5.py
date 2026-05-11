@@ -1709,7 +1709,7 @@ def check_datos_brecha_temporal_edad(context):
 @asset_check(
     asset=plot_mapa_brecha_salarial_canarias,
     description=(
-        "Verifica contratos 2023, rentas 2023, GeoJSON municipios2023.json, "
+        "Verifica contratos 2023, rentas 2023, GeoJSON canarias2026.geojson, "
         "cobertura ≥ 80 municipios y TwoSlopeNorm viable."
     ),
 )
@@ -1733,10 +1733,10 @@ def check_datos_mapa_brecha_canarias(context):
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
 
     # GeoJSON
-    geojson = os.path.join(data_dir, "canarias2026.geojson")
+    geojson = os.path.join(data_dir, "municipios2023.json")
     ok = os.path.exists(geojson)
     passed = passed and ok
-    report_md += f"- canarias2026.geojson: {'🟢' if ok else '🔴'}\n"
+    report_md += f"- municipios2023.json: {'🟢' if ok else '🔴'}\n"
 
     if ok:
         try:
@@ -1744,6 +1744,9 @@ def check_datos_mapa_brecha_canarias(context):
             ok2 = len(gdf_test) >= 80
             passed = passed and ok2
             report_md += f"- GeoJSON ≥ 80 polígonos: {'🟢' if ok2 else '🔴'} ({len(gdf_test)})\n"
+            ok3 = "etiqueta" in gdf_test.columns
+            passed = passed and ok3
+            report_md += f"- Columna 'etiqueta' presente: {'🟢' if ok3 else '🔴'}\n"
         except Exception as e:
             passed = False
             report_md += f"- Error leyendo GeoJSON: 🔴 {e}\n"

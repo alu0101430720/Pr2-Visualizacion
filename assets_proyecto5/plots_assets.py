@@ -516,7 +516,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     # Eje Y
     _aplicar_eje_y(ax,
                    y_min_data=float(df["OBS_VALUE"].min()),
-                   y_max_data=float(df["OBS_VALUE"].max()) + 5,
+                   y_max_data=float(df["OBS_VALUE"].max()),
                    empezar_en_cero=empezar_en_cero)
 
     ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 1.5)
@@ -1080,7 +1080,7 @@ def plot_mapa_brecha_salarial_canarias(context: AssetExecutionContext) -> None:
     Mapa coroplético del índice de brecha salarial por municipio — Toda Canarias.
     Usa contratos 2023 (flujo anual completo) × rentas 2023 del mismo año,
     evitando el cruce temporal imperfecto del boxplot (contratos mar 2026 × rentas 2023).
-    GeoJSON: municipios2023.json (88 municipios).
+    GeoJSON: canarias2026.geojson (88 municipios).
 
     GESTALT:
       Similitud   — RdBu_r divergente centrado en 0: rojo = favorable a hombres,
@@ -1123,28 +1123,7 @@ def plot_mapa_brecha_salarial_canarias(context: AssetExecutionContext) -> None:
         return (unicodedata.normalize("NFD", str(s).strip().upper())
                 .encode("ascii", "ignore").decode())
 
-    MANUAL = {
-        "ALDEA DE SAN NICOLAS, LA":            "LA ALDEA DE SAN NICOLAS",
-        "FUENCALIENTE DE LA PALMA":            "FUENCALIENTE",
-        "GUANCHA, LA":                         "LA GUANCHA",
-        "LLANOS DE ARIDANE, LOS":              "LOS LLANOS DE ARIDANE",
-        "MATANZA DE ACENTEJO, LA":             "LA MATANZA DE ACENTEJO",
-        "OLIVA, LA":                           "LA OLIVA",
-        "OROTAVA, LA":                         "LA OROTAVA",
-        "PALMAS DE GRAN CANARIA, LAS":         "LAS PALMAS DE GRAN CANARIA",
-        "PASO, EL":                            "EL PASO",
-        "PINAR DE EL HIERRO, EL":             "EL PINAR",
-        "REALEJOS, LOS":                       "LOS REALEJOS",
-        "ROSARIO, EL":                         "EL ROSARIO",
-        "SAN CRISTOBAL DE LA LAGUNA":          "LA LAGUNA",
-        "SANTA MARIA DE GUIA DE GRAN CANARIA": "SANTA MARIA DE GUIA",
-        "SAUZAL, EL":                          "EL SAUZAL",
-        "SILOS, LOS":                          "LOS SILOS",
-        "TANQUE, EL":                          "EL TANQUE",
-        "VALSEQUILLO DE GRAN CANARIA":         "VALSEQUILLO",
-        "VICTORIA DE ACENTEJO, LA":            "LA VICTORIA DE ACENTEJO",
-        "VILAFLOR DE CHASNA":                  "VILAFLOR",
-    }
+    MANUAL = {}   # municipios2023.json tiene etiquetas limpias, sin artículos invertidos
 
     # ── Cargar contratos 2023 ─────────────────────────────────────────────────
     paths_2023 = sorted(glob.glob(
@@ -1182,8 +1161,6 @@ def plot_mapa_brecha_salarial_canarias(context: AssetExecutionContext) -> None:
     merged = ratio.merge(sal, on="Municipio", how="inner")
     merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
     merged["mun_norm"] = merged["Municipio"].apply(_norm)
-    merged["mun_norm"] = merged["mun_norm"].replace(
-        {_norm(k): _norm(v) for k, v in MANUAL.items()})
 
     context.log.info(
         f"Municipios con dato: {len(merged)} · "
@@ -1191,8 +1168,9 @@ def plot_mapa_brecha_salarial_canarias(context: AssetExecutionContext) -> None:
         f"{merged['indice_brecha'].max():.2f}]")
 
     # ── GeoJSON ───────────────────────────────────────────────────────────────
+    # municipios2023.json usa columna 'etiqueta' con nombres limpios (sin artículos invertidos)
     gdf = gpd.read_file(geojson)
-    gdf["nombre_norm"] = gdf["nombre"].apply(_norm)
+    gdf["nombre_norm"] = gdf["etiqueta"].apply(_norm)
     gdf = gdf.merge(merged[["mun_norm", "indice_brecha"]],
                     left_on="nombre_norm", right_on="mun_norm", how="left")
 
