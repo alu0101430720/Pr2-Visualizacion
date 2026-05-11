@@ -8,11 +8,13 @@ from assets import preprocesar_datos_p5, commitear_plots_a_github
 from plots_assets import (
     plot_actividad_barras,
     plot_ocupacion_divergente,
+    plot_mapa_distribucion_renta,
     plot_brecha_salarial,
     plot_mapa_brecha_salarial,
     get_processed_path,
     get_geojson_path,
     get_plot_config,
+    get_paleta,
     get_plot_dir,
     plot_gini_evolucion_islas,
     plot_brecha_salarial_islas,
@@ -22,6 +24,7 @@ from plots_assets import (
     plot_brecha_temporal_edad,
     plot_historico_tipos_contrato_por_edad,
     ISLAS_ORDEN,
+    COLORES_ISLA,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -684,6 +687,14 @@ def check_consistencia_municipios_cruzados(context, preprocesar_datos_p5: str):
         metadata={"Consistencia_Municipios": MetadataValue.md(report_md)},
     )
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# BLOQUE 2 — CHECKS DE PLOTS (precondiciones de datos)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+
+
 @asset_check(
     asset=plot_actividad_barras,
     description="Precondiciones para plot_actividad_barras.",
@@ -778,6 +789,64 @@ def check_datos_ocupacion_divergente(context):
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Divergente": MetadataValue.md(report_md)},
     )
+
+
+@asset_check(
+    asset=plot_mapa_distribucion_renta,
+    description="Precondiciones para plot_mapa_distribucion_renta.",
+)
+def check_datos_mapa_distribucion(context):
+    """
+    Gestalt — Figura/Fondo: cobertura baja produce municipios grises que el
+    lector interpreta como valor bajo, no como dato faltante.
+    Gestalt — Similitud: un outlier extremo aplana el gradiente secuencial
+    haciendo que todo el territorio parezca homogéneo.
+    """
+    cfg        = get_plot_config()["mapa_distribucion"]
+    año        = cfg["ano"]
+    componente = cfg["componente"]
+    df         = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
+    df_fil     = df[(df["año"] == año) & (df["MEDIDAS_CODE"] == componente)]
+    passed = True
+    report_md = f"### Precondiciones: mapa_distribucion ({componente}, {año})\n\n"
+
+    n  = len(df_fil)
+    ok = n > 0
+    passed = passed and ok
+    report_md += f"- Registros año={año}, componente={componente}: {'🟢' if ok else '🔴'} ({n})\n"
+
+    gjson = get_geojson_path(f"secciones_{año}0101_tenerife.json")
+    ok    = os.path.exists(gjson)
+    passed = passed and ok
+    report_md += f"- GeoJSON existe: {'🟢' if ok else '🔴'}\n"
+
+    if ok and n > 0:
+        try:
+            gdf = gpd.read_file(gjson)
+            gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
+            mun_gdf = set(gdf["municipio"].dropna().unique())
+            mun_csv = set(df_fil.groupby("municipio")["OBS_VALUE"].median().index)
+            cob     = len(mun_csv & mun_gdf) / len(mun_csv) if mun_csv else 0
+            ok_cob  = cob >= 0.8
+            passed  = passed and ok_cob
+            report_md += f"- Cobertura join municipio: {'🟢' if ok_cob else '🔴'} {cob:.0%}\n"
+            sin_match = mun_csv - mun_gdf
+            if sin_match:
+                report_md += f"  - Sin match: `{'`, `'.join(sorted(sin_match)[:8])}`\n"
+        except Exception as e:
+            report_md += f"- Cobertura join: ⚠️ {e}\n"
+
+    if n > 0:
+        q1, q3  = df_fil["OBS_VALUE"].quantile([0.25, 0.75])
+        outliers = int(((df_fil["OBS_VALUE"] < q1 - 3*(q3-q1)) | (df_fil["OBS_VALUE"] > q3 + 3*(q3-q1))).sum())
+        report_md += f"- Outliers extremos (IQR×3): {'🟢' if outliers == 0 else '⚠️'} {outliers}\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_Mapa_Dist": MetadataValue.md(report_md)},
+    )
+
 
 @asset_check(
     asset=plot_brecha_salarial,
@@ -1202,22 +1271,24 @@ def check_datos_gini_evolucion(context):
     """
     Gestalt — Continuidad: sin los 9 años completos para todas las islas,
     la línea une puntos no consecutivos generando pendientes falsas.
-    Similitud: sin Canarias como referencia, el lector no puede calibrar
-    si una isla está por encima o debajo del agregado regional.
+    Similitud: el plot resalta top 3 por Gini 2023 — si alguna isla no tiene
+    dato en 2023 la etiqueta directa desaparece sin error visible.
     """
     df     = pd.read_csv(get_processed_path("gini.csv")).dropna(subset=["OBS_VALUE"])
     passed = True
     report_md = "### Precondiciones: gini_evolucion_islas\n\n"
 
+    ISLAS_SIN_CANARIAS = {i for i in ISLAS_ORDEN if i != "Canarias"}
     islas_data = df[(df["MEDIDAS"] == "Índice de Gini") &
-                    (df["tipo_territorio"] == "isla")]
+                    (df["tipo_territorio"] == "isla") &
+                    (df["TERRITORIO"] != "Canarias")]
 
-    # Todas las islas + Canarias presentes
+    # Las 7 islas presentes (sin Canarias — no se grafica)
     islas_presentes = set(islas_data["TERRITORIO"].unique())
-    faltantes       = set(ISLAS_ORDEN) - islas_presentes
+    faltantes       = ISLAS_SIN_CANARIAS - islas_presentes
     ok = len(faltantes) == 0
     passed = passed and ok
-    report_md += f"- Todos los territorios presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
+    report_md += f"- 7 islas presentes (sin Canarias): {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
 
     # 9 años completos para cada isla
     por_isla = islas_data.groupby("TERRITORIO")["TIME_PERIOD"].nunique()
@@ -1225,6 +1296,14 @@ def check_datos_gini_evolucion(context):
     ok = len(incompletas) == 0
     passed = passed and ok
     report_md += f"- 9 años completos por isla: {'🟢' if ok else '🔴'} (incompletas: {incompletas or '–'})\n"
+
+    # Dato 2023 disponible para el top 3
+    TOP3 = ["La Palma","El Hierro","Tenerife"]
+    con_2023 = set(islas_data[islas_data["TIME_PERIOD"]==2023]["TERRITORIO"].unique())
+    sin_2023 = [i for i in TOP3 if i not in con_2023]
+    ok = len(sin_2023) == 0
+    passed = passed and ok
+    report_md += f"- Top 3 con dato 2023: {'🟢' if ok else '🔴'} (sin dato: {sin_2023 or '–'})\n"
 
     # Sin saltos temporales
     for isla, grupo in islas_data.groupby("TERRITORIO"):
@@ -1244,21 +1323,65 @@ def check_datos_gini_evolucion(context):
 
 @asset_check(
     asset=plot_brecha_salarial_islas,
-    description="Precondiciones para el boxplot de brecha salarial territorial.",
+    description=(
+        "Precondiciones para plot_brecha_salarial_islas: "
+        "contratos_202603.csv + distribucion-renta-ingresos, "
+        "intersección ≥ 40 municipios, ambos sexos, TwoSlopeNorm viable."
+    ),
 )
 def check_datos_brecha_islas(context):
-    from plots_assets import get_plot_config
-    cfg = get_plot_config()["brecha_salarial"]
-    
-    ocu = pd.read_csv(os.path.join("..", "data-P5", "processed", "contratos_202603.csv")).dropna(subset=["Contratos"])
-    dist = pd.read_csv(os.path.join("..", "data-P5", "processed", cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
-    
-    n_mun = len(set(ocu["Municipio"]) & set(dist["municipio"]))
-    passed = n_mun >= 40
-    
-    report_md = "### Precondiciones: Brecha Salarial Islas\n\n"
-    report_md += f"- Intersección de municipios suficiente (≥ 40): {'🟢' if passed else '🔴'} ({n_mun})\n"
-    
+    """
+    Gestalt — Similitud: sin COLORES_ISLA con las 7 islas el boxplot asigna
+    colores por posición, rompiendo la coherencia con los gráficos de línea.
+    Cierre: TwoSlopeNorm requiere valores + y − para el mapa coroplético;
+    si todos son positivos matplotlib lanza un error silencioso.
+    """
+    cfg      = get_plot_config()["brecha_salarial"]
+    AÑO_MAPA = cfg.get("ano_mapa", 2023)
+    passed   = True
+    report_md = "### Precondiciones: brecha_salarial_islas\n\n"
+
+    # Contratos 202603
+    p_ocu = get_processed_path("contratos_202603.csv")
+    ok    = os.path.exists(p_ocu)
+    passed = passed and ok
+    report_md += f"- contratos_202603.csv: {'🟢' if ok else '🔴'}\n"
+
+    if ok:
+        ocu = pd.read_csv(p_ocu).dropna(subset=["Contratos"])
+        ocu = ocu.rename(columns={"Municipio": "municipio"})
+
+        # Distribución renta
+        p_dist = get_processed_path(cfg["dataset_dist"])
+        ok2    = os.path.exists(p_dist)
+        passed = passed and ok2
+        report_md += f"- {cfg['dataset_dist']}: {'🟢' if ok2 else '🔴'}\n"
+
+        if ok2:
+            dist = pd.read_csv(p_dist).dropna(subset=["OBS_VALUE"])
+            sal  = dist[(dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS") &
+                        (dist["año"] == AÑO_MAPA)]
+
+            n_mun = len(set(ocu["municipio"]) & set(sal["municipio"]))
+            ok3   = n_mun >= 40
+            passed = passed and ok3
+            report_md += f"- Municipios en intersección ≥ 40: {'🟢' if ok3 else '🔴'} ({n_mun})\n"
+
+        # Ambos sexos
+        sexos = set(ocu["sexo"].dropna().unique())
+        ok4   = {"Hombres","Mujeres"}.issubset(sexos)
+        passed = passed and ok4
+        report_md += f"- Ambos sexos en contratos: {'🟢' if ok4 else '🔴'}\n"
+
+        # Colores de islas completos
+        from checks_p5 import inferir_isla as _inferir
+        islas_datos = set(ocu["municipio"].dropna().apply(_inferir).unique()) - {"Desconocida"}
+        faltantes   = islas_datos - set(COLORES_ISLA.keys())
+        ok5         = len(faltantes) == 0
+        passed      = passed and ok5
+        report_md  += (f"- Todas las islas con color: {'🟢' if ok5 else '🔴'}"
+                       f" (sin color: {faltantes or '–'})\n")
+
     return AssetCheckResult(
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,

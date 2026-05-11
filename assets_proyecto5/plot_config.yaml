@@ -1,5 +1,27 @@
-# Configuración dinámica para los Assets Gráficos
-# Aquí puedes editar los años, las paletas de color y los componentes a mapear libremente.
+# ══════════════════════════════════════════════════════════════════════════════
+# plot_config.yaml — Configuración dinámica de assets gráficos
+# ══════════════════════════════════════════════════════════════════════════════
+
+# ── Paleta global ─────────────────────────────────────────────────────────────
+# USO 1 — Identidad de género (barras apiladas, líneas, histogramas):
+#   color_hombres / color_mujeres identifican la serie, no emiten juicio.
+#
+# USO 2 — Dirección de la brecha (mapa coroplético, slope chart):
+#   color_brecha_favorable_hombres / color_brecha_favorable_mujeres.
+#   Por defecto igual que Uso 1. Cambiar aquí afecta a todo el proyecto.
+#
+# USO 3 — Tipos de contrato (fijo en el código, no configurable aquí):
+#   Temp. Parcial #e63946 · Temp. Completo #f4a261
+#   Conversión #a8dadc · Indefinido #2a9d8f
+
+paleta:
+  color_hombres: "#4A90D9"
+  color_mujeres: "#D94A8C"
+  color_brecha_favorable_hombres: "#4A90D9"
+  color_brecha_favorable_mujeres: "#D94A8C"
+  cmap_brecha: "RdBu_r"   # opciones: "RdBu_r", "PiYG", "PRGn", "BrBG"
+
+# ── Assets existentes ─────────────────────────────────────────────────────────
 
 distribucion_lineas:
   dataset: "distribucion-renta-ingresos.csv"
@@ -8,11 +30,14 @@ distribucion_lineas:
 mapa_distribucion:
   dataset: "distribucion-renta-ingresos.csv"
   ano: 2023
-  componente: "SUELDOS_SALARIOS"      # Opciones: OTRAS_PRESTACIONES, OTROS_INGRESOS, PENSIONES, PRESTACIONES_DESEMPLEO, SUELDOS_SALARIOS
+  componente: "SUELDOS_SALARIOS"
+  # Opciones: OTRAS_PRESTACIONES, OTROS_INGRESOS, PENSIONES,
+  #           PRESTACIONES_DESEMPLEO, SUELDOS_SALARIOS
 
 actividad_barras:
   dataset: "actividad-sc-3.csv"
-  isla: "Tenerife"   # Opciones: "Tenerife", "La Palma", "La Gomera", "El Hierro", o "Todas"
+  isla: "Tenerife"
+  # Opciones: "Tenerife", "La Palma", "La Gomera", "El Hierro", "Todas"
 
 ocupacion_divergente:
   dataset: "ocupacion-sc-3.csv"
@@ -27,28 +52,32 @@ brecha_salarial:
   umbral: 0.02
 
 brecha_temporal_edad:
-  isla: "Tenerife"  # Opciones: "Todas", "Tenerife", "Gran Canaria", "Lanzarote", "Fuerteventura", "La Palma", "La Gomera", "El Hierro"
+  isla: "Tenerife"
+  # Opciones: "Todas", "Tenerife", "Gran Canaria", "Lanzarote",
+  #           "Fuerteventura", "La Palma", "La Gomera", "El Hierro"
 
-# ── Nuevos assets con datos de contratos históricos ──────────────────────────
-#
-# ambito controla qué territorio se representa en el gráfico.
-#
-# Opciones para ambito:
-#   "Canarias"      → todas las islas (facet por isla)
-#   "SC Tenerife"   → provincia: Tenerife, La Palma, La Gomera, El Hierro
-#   "Las Palmas"    → provincia: Gran Canaria, Lanzarote, Fuerteventura
-#   nombre de isla  → solo esa isla, sin facet (más legible)
-#     Valores válidos: "Tenerife", "Gran Canaria", "La Palma", "La Gomera",
-#                      "El Hierro", "Lanzarote", "Fuerteventura"
-#
-# ano: año de los contratos a usar (2019-2025 o 2026 para solo marzo)
+# ── Control eje Y: true = desde 0 / false = truncado con símbolo // ──────────
+
+covid_sueldos_islas:
+  empezar_en_cero: false
+
+covid_prestaciones_islas:
+  empezar_en_cero: false
+
+gini_evolucion_islas:
+  empezar_en_cero: false
+
+# ── Assets contratos históricos (toda Canarias) ───────────────────────────────
+# ambito: "Canarias" | "SC Tenerife" | "Las Palmas" | nombre de isla
+# ano: 2019-2025 o 2026 (solo marzo)
 
 actividad_barras_canarias:
   ano: 2025
-  ambito: "Tenerife"      # Ver opciones arriba
-  top_n_actividades: 6    # Sectores a mostrar (recomendado: 5-8)
+  ambito: "Tenerife"
+  top_n_actividades: 6
 
 ocupacion_divergente_canarias:
   ano: 2025
-  ambito: "Tenerife"      # Ver opciones arriba
-  min_contratos: 100      # Excluir grupos CNO con menos de N contratos en esa isla
+  ambito: "Tenerife"
+  min_contratos: 100
+  agregar_islas: false   # true = gráfico único agregado sin facet
