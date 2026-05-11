@@ -1080,7 +1080,7 @@ def plot_mapa_brecha_salarial_canarias(context: AssetExecutionContext) -> None:
     Mapa coroplético del índice de brecha salarial por municipio — Toda Canarias.
     Usa contratos 2023 (flujo anual completo) × rentas 2023 del mismo año,
     evitando el cruce temporal imperfecto del boxplot (contratos mar 2026 × rentas 2023).
-    GeoJSON: canarias2026.geojson (88 municipios).
+    GeoJSON: municipios2023.json (88 municipios).
 
     GESTALT:
       Similitud   — RdBu_r divergente centrado en 0: rojo = favorable a hombres,
@@ -1103,7 +1103,7 @@ def plot_mapa_brecha_salarial_canarias(context: AssetExecutionContext) -> None:
     cmap = pal["cmap_brecha"]
 
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
-    geojson  = os.path.join(data_dir, "canarias2026.geojson")
+    geojson  = os.path.join(data_dir, "municipios2023.json")
 
     if not os.path.exists(geojson):
         context.log.warning(f"GeoJSON no encontrado: {geojson}")
