@@ -340,6 +340,7 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
     AÑO    = cfg.get("ano", 2025)
     AMBITO = cfg.get("ambito", "Canarias")
     MIN_C  = cfg.get("min_contratos", 100)
+    AGREGAR = cfg.get("agregar_islas", False)
 
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
     df = _cargar_contratos(data_dir, AÑO)
@@ -359,21 +360,28 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
 
     es_isla_unica = AMBITO in ISLAS_VALIDAS
 
-    if es_isla_unica:
+    # ── Modo agregado: toda Canarias en un único gráfico sin facet ────────────
+    if AGREGAR or es_isla_unica:
         pivot = (
             df.groupby(["grupo_cno","sexo"])["c"]
             .sum().unstack("sexo").fillna(0).reset_index()
         )
         pivot.columns.name = None
-        pivot["total_isla"] = df["c"].sum()
-        pivot["brecha"]     = (
+        total_can          = df["c"].sum()
+        pivot["brecha"]    = (
             (pivot.get("Hombres",0) - pivot.get("Mujeres",0))
-            / pivot["total_isla"] * 100
+            / total_can * 100
         )
-        pivot["total"]      = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
-        pivot               = pivot[pivot["total"] >= MIN_C]
-        pivot["direccion"]  = pivot["brecha"].apply(
+        pivot["total"]     = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
+        pivot              = pivot[pivot["total"] >= MIN_C]
+        pivot["direccion"] = pivot["brecha"].apply(
             lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
+
+        subtitulo = (
+            "Diferencia (H − M) como % del total de contratos · grupos CNO-1"
+            if es_isla_unica else
+            "Diferencia (H − M) como % del total de contratos de Canarias · grupos CNO-1"
+        )
 
         p = (
             ggplot(pivot,
@@ -388,13 +396,15 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + scale_y_continuous(labels=lambda l: [f"{v:+.1f}%" for v in l])
             + coord_flip()
             + labs(title=titulo,
-                   subtitle="Diferencia (H − M) como % del total de contratos · grupos CNO-1",
+                   subtitle=subtitulo,
                    x=None, y="% sobre total contratos (Hombres − Mujeres)",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((11, 6))
         )
         fig_w, fig_h = 11, 6
+
     else:
+        # ── Modo facet: una columna por isla ──────────────────────────────────
         islas_ambito = _islas_en_ambito(AMBITO)
         # Total por isla para normalizar
         total_isla = df[df["isla"].isin(ISLAS_VALIDAS)].groupby("isla")["c"].sum()
