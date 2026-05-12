@@ -81,3 +81,6 @@ ocupacion_divergente_canarias:
   ambito: "Canarias"
   min_contratos: 100
   agregar_islas: true   # true = gráfico único agregado sin facet
+
+mapa_feminizacion_municipios:
+  ambito: "Canarias"   # opciones: "Canarias", "SC Tenerife", "Las Palmas", o isla

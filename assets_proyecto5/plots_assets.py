@@ -550,82 +550,21 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
-def plot_brecha_salarial_islas(context: AssetExecutionContext) -> None:
-    """
-    Boxplot de la distribución del índice de brecha por isla — Toda Canarias.
-    Colores coherentes con los gráficos de línea (COLORES_ISLA).
-    """
-    from checks_p5 import inferir_isla
-    cfg     = get_plot_config()["brecha_salarial"]
-    AÑO_MAPA = cfg.get("ano_mapa", 2023)
-
-    ocu = pd.read_csv(get_processed_path("contratos_202603.csv")).dropna(
-        subset=["Contratos"])
-    ocu = ocu.rename(columns={"Municipio": "municipio"})
-
-    ocu_hm = (
-        ocu[ocu["sexo"].isin(["Hombres","Mujeres"])]
-        .groupby(["municipio","sexo"], as_index=False)["Contratos"].sum()
-        .pivot(index="municipio", columns="sexo", values="Contratos")
-        .reset_index().fillna(0)
-    )
-    ocu_hm.columns.name = None
-    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (
-        ocu_hm["Hombres"] + ocu_hm["Mujeres"] + 1e-9)
-
-    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(
-        subset=["OBS_VALUE"])
-    sal  = (
-        dist[(dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS") &
-             (dist["año"] == AÑO_MAPA)]
-        .groupby("municipio", as_index=False)["OBS_VALUE"].median()
-        .rename(columns={"OBS_VALUE": "pct_salarios"})
-    )
-
-    merged = ocu_hm.merge(sal, on="municipio", how="inner")
-    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
-    merged["isla"] = merged["municipio"].apply(inferir_isla)
-    df = merged[merged["isla"] != "Desconocida"].copy()
-
-    orden = df.groupby("isla")["indice_brecha"].median().sort_values().index.tolist()
-    df["isla"] = pd.Categorical(df["isla"], categories=orden, ordered=True)
-
-    p = (
-        ggplot(df, aes(x="isla", y="indice_brecha", fill="isla"))
-        + geom_hline(yintercept=0, linetype="dashed", color="#555555", size=0.8)
-        + geom_boxplot(alpha=0.6, outlier_alpha=0, width=0.5, color="#333333")
-        + geom_jitter(width=0.15, size=2, alpha=0.8, color="#222222")
-        + scale_fill_manual(values=COLORES_ISLA, guide=None)
-        + coord_flip()
-        + labs(
-            title="Distribución de la brecha de género por isla — Toda Canarias",
-            subtitle=("Índice > 0: Contratación favorable a hombres · "
-                      "Índice < 0: Favorable a mujeres\n"
-                      "Puntos = Municipios · "
-                      "Proxy: Contratos marzo 2026 × Dependencia Salarial 2023"),
-            x=None, y="Índice de brecha salarial/laboral ponderado",
-            caption="Fuente: SEPE / OBECAN · Contratos marzo 2026",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(12, 6),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=9, color="#555555"),
-            axis_text_y=element_text(size=11, face="bold"),
-            panel_grid_minor=element_blank(),
-            panel_grid_major_y=element_blank(),
-            panel_grid_major_x=element_line(color="#dddddd", size=0.4),
-        )
-    )
-    out = os.path.join(get_plot_dir(), "brecha_salarial_islas.png")
-    p.save(out, width=10, height=6, dpi=150, verbose=False)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Brecha Islas]({out})")})
-
-
-@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
-    """Heatmap ratio H/(H+M) por sector e isla — Canarias, Marzo 2026."""
+    """
+    Heatmap ratio H/(H+M) por sector e isla — Canarias, Marzo 2026.
+    Sin anotaciones en celda: el gradiente de color codifica la información,
+    los números dentro eran redundantes y añadían ruido visual.
+
+    GESTALT:
+      Similitud   — RdBu_r centrado en 0.5: rojo = masculinizado,
+                    azul = feminizado, blanco = paridad.
+      Proximidad  — actividades ordenadas de más feminizadas (arriba) a más
+                    masculinizadas (abajo): clusters emergen sin intervención.
+      Continuidad — lectura oeste→este permite detectar si la segregación
+                    es local o estructural en todo el archipiélago.
+      Cierre      — bordes blancos definen cada celda sin sobrecargar.
+    """
     pal = get_paleta()
 
     df = pd.read_csv(get_processed_path("contratos_202603.csv"))
@@ -638,19 +577,18 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
 
     ABREV = {
         "Producción cinematográfica, de vídeo y de programas de televisión, "
-        "grabación de sonido y edición musical":                    "Producción audiovisual",
-        "Servicios a edificios y actividades de jardinería":        "Servicios a edificios",
-        "Actividades de construcción especializada":                "Construcción esp.",
-        "Administración pública y defensa; seguridad social obligatoria":
-                                                                    "Adm. pública",
-        "Actividades de creación artística y artes escénicas":      "Artes escénicas",
-        "Actividades sanitarias":      "Actividades sanitarias",
-        "Servicios de alojamiento":    "Alojamiento",
+        "grabación de sonido y edición musical":                 "Prod. audiovisual",
+        "Servicios a edificios y actividades de jardinería":     "Servicios a edificios",
+        "Actividades de construcción especializada":             "Construcción esp.",
+        "Administración pública y defensa; seguridad social obligatoria": "Adm. pública",
+        "Actividades de creación artística y artes escénicas":   "Artes escénicas",
+        "Actividades sanitarias":       "Sanidad",
+        "Servicios de alojamiento":     "Alojamiento",
         "Servicios de comidas y bebidas": "Hostelería",
-        "Comercio al por menor":       "Comercio minorista",
-        "Comercio al por mayor":       "Comercio mayorista",
-        "Educación":                   "Educación",
-        "Construcción de edificios":   "Construcción de edificios",
+        "Comercio al por menor":        "Comercio minorista",
+        "Comercio al por mayor":        "Comercio mayorista",
+        "Educación":                    "Educación",
+        "Construcción de edificios":    "Construcción",
     }
 
     pivot = (
@@ -662,55 +600,47 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
     pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV)
 
-    ISLAS_ORD_HM = ["EL HIERRO","LA GOMERA","LA PALMA","TENERIFE",
-                    "GRAN CANARIA","LANZAROTE","FUERTEVENTURA"]
-    ISLAS_LBL    = ["El Hierro","La Gomera","La Palma","Tenerife",
-                    "Gran Canaria","Lanzarote","Fuerteventura"]
+    ISLAS_ORD = ["EL HIERRO","LA GOMERA","LA PALMA","TENERIFE",
+                 "GRAN CANARIA","LANZAROTE","FUERTEVENTURA"]
+    ISLAS_LBL = ["El\nHierro","La\nGomera","La\nPalma","Tenerife",
+                 "Gran\nCanaria","Lanzarote","Fuerte-\nventura"]
 
     orden_act = (pivot.groupby("actividad_short")["ratio_hm"]
                  .mean().sort_values(ascending=True).index.tolist())
 
     heat = (pivot.pivot(index="actividad_short", columns="isla", values="ratio_hm")
-            .reindex(index=orden_act, columns=ISLAS_ORD_HM))
+            .reindex(index=orden_act, columns=ISLAS_ORD))
 
-    fig, ax = plt.subplots(figsize=(13, 7))
+    fig, ax = plt.subplots(figsize=(12, 6))
+    fig.patch.set_facecolor("white")
+
     norm_c = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
     cmap_c = plt.get_cmap(pal["cmap_brecha"])
     ax.imshow(heat.values, cmap=cmap_c, norm=norm_c, aspect="auto")
 
-    ax.set_xticks(range(len(ISLAS_ORD_HM)))
-    ax.set_xticklabels(ISLAS_LBL, fontsize=11, fontweight="bold")
+    ax.set_xticks(range(len(ISLAS_ORD)))
+    ax.set_xticklabels(ISLAS_LBL, fontsize=10, fontweight="bold")
     ax.set_yticks(range(len(orden_act)))
     ax.set_yticklabels(orden_act, fontsize=10)
     ax.tick_params(left=False, bottom=False)
 
-    for i in range(len(orden_act)):
-        for j in range(len(ISLAS_ORD_HM)):
-            val = heat.values[i, j]
-            if not np.isnan(val):
-                pct_h = int(round(val * 100))
-                color_txt = "white" if abs(val - 0.5) > 0.25 else "#333333"
-                ax.text(j, i, f"{pct_h}H\n{100-pct_h}M",
-                        ha="center", va="center",
-                        fontsize=7.5, fontweight="bold", color=color_txt)
-
     for i in range(len(orden_act) + 1):
-        ax.axhline(i - 0.5, color="white", lw=1.5)
-    for j in range(len(ISLAS_ORD_HM) + 1):
-        ax.axvline(j - 0.5, color="white", lw=1.5)
+        ax.axhline(i - 0.5, color="white", lw=1.2)
+    for j in range(len(ISLAS_ORD) + 1):
+        ax.axvline(j - 0.5, color="white", lw=1.2)
 
-    ax.set_xlim(-0.5, len(ISLAS_ORD_HM) - 0.5)
+    ax.set_xlim(-0.5, len(ISLAS_ORD) - 0.5)
     ax.set_ylim(-0.5, len(orden_act) - 0.5)
 
     cb = fig.colorbar(ScalarMappable(norm=norm_c, cmap=cmap_c),
-                      ax=ax, orientation="vertical", shrink=0.7, pad=0.02)
-    cb.set_label("% Hombres contratados", fontsize=9)
+                      ax=ax, orientation="vertical", shrink=0.8, pad=0.02)
+    cb.set_label("% hombres contratados", fontsize=9)
     cb.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
-    cb.set_ticklabels(["0%\n(todo mujeres)","25%","50%\n(paridad)",
-                       "75%","100%\n(todo hombres)"])
+    cb.set_ticklabels(["0%\n(solo mujeres)","25%","50%\n(paridad)",
+                       "75%","100%\n(solo hombres)"])
 
     ax.set_title("Segregación de género por sector e isla — Canarias, Marzo 2026",
-                 fontsize=14, fontweight="bold", pad=14)
+                 fontsize=13, fontweight="bold", pad=12)
     fig.text(0.01, -0.02,
              "Azul = mayoría mujeres · Rojo = mayoría hombres · "
              "Blanco = paridad  ·  Fuente: SEPE / OBECAN · Contratos marzo 2026",
@@ -722,6 +652,153 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Heatmap Segregación]({out})")})
+
+
+@asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
+def plot_mapa_feminizacion_municipios(context: AssetExecutionContext) -> None:
+    """
+    Mapa coroplético del ratio H/(H+M) de contratos por municipio.
+    Muestra qué municipios tienen mercados laborales feminizados o masculinizados
+    independientemente de los salarios — complementa el mapa de brecha salarial.
+
+    GESTALT:
+      Similitud   — RdBu_r centrado en 0.5 (paridad): rojo = masculinizado,
+                    azul = feminizado. Misma paleta que el heatmap sectorial
+                    para coherencia visual entre plots.
+      Proximidad  — municipios vecinos comparables de un vistazo.
+      Cierre      — polígonos municipales como unidades perceptivas completas.
+      Figura/Fondo — gris para municipios sin dato, claramente distinguible
+                     del blanco de paridad.
+
+    DISEÑO:
+      Ámbito configurable en YAML: Canarias, SC Tenerife, Las Palmas o isla.
+      TwoSlopeNorm con límites fijos [0.2, 0.8] para comparabilidad entre
+      ejecuciones — no se recalcula con cada dataset.
+      Fuente: contratos_202603.csv (misma que el heatmap sectorial).
+    """
+    import re
+
+    cfg    = get_plot_config().get("mapa_feminizacion_municipios", {})
+    AMBITO = cfg.get("ambito", "Canarias")
+    pal    = get_paleta()
+
+    PROVINCIAS = {
+        "SC Tenerife": {"Tenerife","La Palma","La Gomera","El Hierro"},
+        "Las Palmas":  {"Gran Canaria","Lanzarote","Fuerteventura"},
+    }
+    ISLAS_VALIDAS = {"Tenerife","Gran Canaria","La Palma","La Gomera",
+                     "El Hierro","Lanzarote","Fuerteventura"}
+
+    def _fix_articulo(s):
+        m = re.match(r"^(.+),\s*(La|El|Los|Las)$", str(s).strip(), re.IGNORECASE)
+        return f"{m.group(2)} {m.group(1)}" if m else s.strip()
+
+    def _norm(s):
+        return (unicodedata.normalize("NFD", str(s).strip().upper())
+                .encode("ascii","ignore").decode())
+
+    # ── Cargar contratos ──────────────────────────────────────────────────────
+    df = pd.read_csv(get_processed_path("contratos_202603.csv"))
+    df.columns = df.columns.str.strip()
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].str.strip()
+    df = df[df["sexo"].isin(["Hombres","Mujeres"])]
+    df["Municipio"] = df["Municipio"].apply(_fix_articulo)
+
+    # ── Filtrar por ámbito ────────────────────────────────────────────────────
+    if AMBITO == "Canarias":
+        pass
+    elif AMBITO in PROVINCIAS:
+        islas = PROVINCIAS[AMBITO]
+        df = df[df["isla"].str.title().isin(islas)]
+    elif AMBITO in ISLAS_VALIDAS:
+        df = df[df["isla"].str.title() == AMBITO]
+    else:
+        context.log.warning(f"Ámbito no reconocido: {AMBITO!r}")
+        return
+
+    # ── Calcular ratio H/(H+M) por municipio ──────────────────────────────────
+    ratio = (df.groupby(["Municipio","sexo"])["Contratos"]
+             .sum().unstack("sexo").fillna(0).reset_index())
+    ratio.columns.name = None
+    ratio["ratio_hm"] = ratio["Hombres"] / (ratio["Hombres"] + ratio["Mujeres"])
+    ratio["mun_norm"] = ratio["Municipio"].apply(_norm)
+
+    context.log.info(
+        f"Ámbito: {AMBITO} · {len(ratio)} municipios · "
+        f"rango [{ratio['ratio_hm'].min():.2f}, {ratio['ratio_hm'].max():.2f}]")
+
+    # ── GeoJSON ───────────────────────────────────────────────────────────────
+    geojson = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR,
+                           "municipios2023.json")
+    if not os.path.exists(geojson):
+        context.log.warning(f"GeoJSON no encontrado: {geojson}")
+        return
+
+    gdf = gpd.read_file(geojson)
+    gdf["mun_norm"] = gdf["etiqueta"].apply(_norm)
+    gdf = gdf.merge(ratio[["mun_norm","ratio_hm"]],
+                    on="mun_norm", how="left")
+
+    n_ok = int(gdf["ratio_hm"].notna().sum())
+    context.log.info(f"Join GeoJSON: {n_ok}/{len(gdf)} municipios")
+
+    # Filtrar polígonos según ámbito
+    if AMBITO != "Canarias":
+        from checks_p5 import inferir_isla
+        gdf["isla_inf"] = gdf["etiqueta"].apply(inferir_isla)
+        if AMBITO in PROVINCIAS:
+            gdf = gdf[gdf["isla_inf"].isin(PROVINCIAS[AMBITO])]
+        elif AMBITO in ISLAS_VALIDAS:
+            gdf = gdf[gdf["isla_inf"] == AMBITO]
+
+    # ── Mapa ──────────────────────────────────────────────────────────────────
+    norm_col = mcolors.TwoSlopeNorm(vmin=0.2, vcenter=0.5, vmax=0.8)
+    cmap     = pal["cmap_brecha"]
+
+    fig, ax = plt.subplots(figsize=(14, 9))
+    fig.patch.set_facecolor("white")
+
+    gdf.plot(column="ratio_hm", cmap=cmap, norm=norm_col,
+             linewidth=0.3, edgecolor="white",
+             missing_kwds={"color":"#dddddd","label":"Sin datos"},
+             legend=False, ax=ax)
+
+    sm = ScalarMappable(cmap=cmap, norm=norm_col)
+    sm.set_array([])
+    cb = fig.colorbar(sm, ax=ax, orientation="vertical",
+                      shrink=0.55, pad=0.02)
+    cb.set_label("% contratos firmados por hombres", fontsize=9)
+    cb.set_ticks([0.2, 0.35, 0.5, 0.65, 0.8])
+    cb.set_ticklabels(["20%\n(muy feminizado)","35%",
+                       "50%\n(paridad)","65%",
+                       "80%\n(muy masculinizado)"])
+
+    titulo_ambito = {"SC Tenerife":"Prov. SC Tenerife",
+                     "Las Palmas":"Prov. Las Palmas"}.get(AMBITO, AMBITO)
+    ax.set_title(
+        f"Feminización del mercado laboral por municipio — "
+        f"{titulo_ambito}, Marzo 2026",
+        fontsize=14, fontweight="bold", pad=12)
+    ax.annotate(
+        "Rojo = mayoría contratos masculinos · "
+        "Azul = mayoría contratos femeninos · Blanco = paridad",
+        xy=(0.01, 0.98), xycoords="axes fraction",
+        fontsize=8.5, color="#555555", va="top")
+    ax.axis("off")
+    fig.text(0.99, 0.01,
+             "Fuente: SEPE / OBECAN · Contratos marzo 2026",
+             ha="right", fontsize=8, color="#888888")
+
+    plt.tight_layout()
+    out = os.path.join(get_plot_dir(), "mapa_feminizacion_municipios.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    context.add_output_metadata({
+        "municipios_con_dato": MetadataValue.int(n_ok),
+        "ambito":              MetadataValue.text(AMBITO),
+        "plot": MetadataValue.md(f"![Mapa Feminización]({out})"),
+    })
 
 
 # ── COVID helpers ─────────────────────────────────────────────────────────────
