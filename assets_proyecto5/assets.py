@@ -174,7 +174,6 @@ def preprocesar_datos_p5() -> str:
         "plot_brecha_salarial",
         "plot_mapa_brecha_salarial",
         "plot_gini_evolucion_islas",
-        "plot_brecha_salarial_islas",
         "plot_heatmap_segregacion_sectorial",
         "plot_covid_sueldos_islas",
         "plot_covid_prestaciones_islas",

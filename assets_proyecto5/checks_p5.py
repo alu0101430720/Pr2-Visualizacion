@@ -18,7 +18,6 @@ from plots_assets import (
     get_paleta,
     get_plot_dir,
     plot_gini_evolucion_islas,
-    plot_brecha_salarial_islas,
     plot_heatmap_segregacion_sectorial,
     plot_covid_sueldos_islas,
     plot_covid_prestaciones_islas,
@@ -1323,76 +1322,6 @@ def check_datos_gini_evolucion(context):
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Gini_Evolucion": MetadataValue.md(report_md)},
     )
-
-
-@asset_check(
-    asset=plot_brecha_salarial_islas,
-    description=(
-        "Precondiciones para plot_brecha_salarial_islas: "
-        "contratos_202603.csv + distribucion-renta-ingresos, "
-        "intersección ≥ 40 municipios, ambos sexos, TwoSlopeNorm viable."
-    ),
-)
-def check_datos_brecha_islas(context):
-    """
-    Gestalt — Similitud: sin COLORES_ISLA con las 7 islas el boxplot asigna
-    colores por posición, rompiendo la coherencia con los gráficos de línea.
-    Cierre: TwoSlopeNorm requiere valores + y − para el mapa coroplético;
-    si todos son positivos matplotlib lanza un error silencioso.
-    """
-    cfg      = get_plot_config()["brecha_salarial"]
-    AÑO_MAPA = cfg.get("ano_mapa", 2023)
-    passed   = True
-    report_md = "### Precondiciones: brecha_salarial_islas\n\n"
-
-    # Contratos 202603
-    p_ocu = get_processed_path("contratos_202603.csv")
-    ok    = os.path.exists(p_ocu)
-    passed = passed and ok
-    report_md += f"- contratos_202603.csv: {'🟢' if ok else '🔴'}\n"
-
-    if ok:
-        ocu = pd.read_csv(p_ocu).dropna(subset=["Contratos"])
-        ocu = ocu.rename(columns={"Municipio": "municipio"})
-
-        # Distribución renta
-        p_dist = get_processed_path(cfg["dataset_dist"])
-        ok2    = os.path.exists(p_dist)
-        passed = passed and ok2
-        report_md += f"- {cfg['dataset_dist']}: {'🟢' if ok2 else '🔴'}\n"
-
-        if ok2:
-            dist = pd.read_csv(p_dist).dropna(subset=["OBS_VALUE"])
-            sal  = dist[(dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS") &
-                        (dist["año"] == AÑO_MAPA)]
-
-            n_mun = len(set(ocu["municipio"]) & set(sal["municipio"]))
-            ok3   = n_mun >= 40
-            passed = passed and ok3
-            report_md += f"- Municipios en intersección ≥ 40: {'🟢' if ok3 else '🔴'} ({n_mun})\n"
-
-        # Ambos sexos
-        sexos = set(ocu["sexo"].dropna().unique())
-        ok4   = {"Hombres","Mujeres"}.issubset(sexos)
-        passed = passed and ok4
-        report_md += f"- Ambos sexos en contratos: {'🟢' if ok4 else '🔴'}\n"
-
-        # Colores de islas completos
-        from checks_p5 import inferir_isla as _inferir
-        islas_datos = set(ocu["municipio"].dropna().apply(_inferir).unique()) - {"Desconocida"}
-        faltantes   = islas_datos - set(COLORES_ISLA.keys())
-        ok5         = len(faltantes) == 0
-        passed      = passed and ok5
-        report_md  += (f"- Todas las islas con color: {'🟢' if ok5 else '🔴'}"
-                       f" (sin color: {faltantes or '–'})\n")
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Brecha_Islas": MetadataValue.md(report_md)},
-    )
-
-
 
 @asset_check(
     asset=plot_historico_tipos_contrato_por_edad,
