@@ -513,7 +513,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     # Eje Y
     _aplicar_eje_y(ax,
                    y_min_data=float(df["OBS_VALUE"].min()),
-                   y_max_data=float(df["OBS_VALUE"].max()),
+                   y_max_data=float(df["OBS_VALUE"].max()+5),
                    empezar_en_cero=empezar_en_cero)
 
     ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 1.5)
