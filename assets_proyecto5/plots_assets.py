@@ -340,7 +340,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante"))
 
     # Top N por variación absoluta (más dinámico que por brecha_media)
-    top = slope.nlargest(TOP_N, "delta")
+    top = slope.reindex(slope["delta"].abs().nlargest(TOP_N).index)
 
     long = pd.concat([
         top.assign(año=AÑO_INI, brecha=top["brecha_ini"]),
@@ -364,9 +364,6 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
                      color="#888888", size=0.5, alpha=0.7)
         + geom_line(size=0.9, alpha=0.8)
         + geom_point(size=2.5, stroke=0.3)
-        + geom_text(aes(label="municipio"),
-                    data=long[long["año"] == AÑO_INI],
-                    ha="right", nudge_x=-0.05, size=9)
         + geom_text(aes(label="municipio"),
                     data=long[long["año"] == AÑO_FIN],
                     ha="left", nudge_x=0.05, size=9)
