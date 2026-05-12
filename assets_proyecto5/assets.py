@@ -182,7 +182,6 @@ def preprocesar_datos_p5() -> str:
         "plot_actividad_barras_canarias",
         "plot_ocupacion_divergente_canarias",
         "plot_mapa_brecha_salarial_canarias",
-        "plot_mapa_feminizacion_municipios",
     ],
     group_name="publicacion",
     description=(
