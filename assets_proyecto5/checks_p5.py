@@ -23,7 +23,6 @@ from plots_assets import (
     plot_covid_prestaciones_islas,
     plot_brecha_temporal_edad,
     plot_historico_tipos_contrato_por_edad,
-    plot_mapa_brecha_salarial_canarias,
     ISLAS_ORDEN,
     COLORES_ISLA,
     _load_rentas,
@@ -1635,87 +1634,3 @@ def check_datos_brecha_temporal_edad(context):
         metadata={"check": MetadataValue.md(report_md)})
 
 
-@asset_check(
-    asset=plot_mapa_brecha_salarial_canarias,
-    description=(
-        "Verifica contratos 2023, rentas 2023, GeoJSON canarias2026.geojson, "
-        "cobertura ≥ 80 municipios y TwoSlopeNorm viable."
-    ),
-)
-def check_datos_mapa_brecha_canarias(context):
-    """
-    Gestalt — Similitud [mapa_brecha_canarias]: TwoSlopeNorm centrada en 0
-    requiere valores positivos y negativos. Si todos los municipios tienen
-    índice > 0 el mapa se vuelve monocromo rojo y el lector no puede
-    distinguir intensidades — la escala divergente pierde su razón de ser.
-
-    Gestalt — Cierre [mapa_brecha_canarias]: con menos de 80/88 municipios
-    con dato, los grises se perciben como "zona sin brecha" en lugar de
-    "dato faltante". El umbral del 90% evita este error de interpretación.
-
-    Gestalt — Figura/Fondo [mapa_brecha_canarias]: el percentil 95 como
-    límite de la escala evita que outliers extremos aplanen el gradiente
-    del resto del territorio, haciendo que la mayoría parezca neutra.
-    """
-    passed   = True
-    report_md = "### Check: mapa_brecha_salarial_canarias\n\n"
-    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
-
-    # GeoJSON
-    geojson = os.path.join(data_dir, "municipios2023.json")
-    ok = os.path.exists(geojson)
-    passed = passed and ok
-    report_md += f"- municipios2023.json: {'🟢' if ok else '🔴'}\n"
-
-    if ok:
-        try:
-            gdf_test = gpd.read_file(geojson)
-            ok2 = len(gdf_test) >= 80
-            passed = passed and ok2
-            report_md += f"- GeoJSON ≥ 80 polígonos: {'🟢' if ok2 else '🔴'} ({len(gdf_test)})\n"
-            ok3 = "etiqueta" in gdf_test.columns
-            passed = passed and ok3
-            report_md += f"- Columna 'etiqueta' presente: {'🟢' if ok3 else '🔴'}\n"
-        except Exception as e:
-            passed = False
-            report_md += f"- Error leyendo GeoJSON: 🔴 {e}\n"
-
-    # Contratos 2023
-    paths_2023 = glob.glob(
-        os.path.join(data_dir, "2023", "contratos_registrados_*.csv"))
-    ok = len(paths_2023) >= 12
-    passed = passed and ok
-    report_md += f"- Ficheros contratos 2023 ≥ 12: {'🟢' if ok else '🔴'} ({len(paths_2023)})\n"
-
-    # Rentas 2023
-    rentas = _load_rentas()
-    sal_2023 = rentas[(rentas["MEDIDAS"]=="Sueldos y salarios") &
-                      (rentas["TIME_PERIOD"]==2023)]
-    ok = len(sal_2023) > 0
-    passed = passed and ok
-    report_md += f"- Rentas 2023 disponibles: {'🟢' if ok else '🔴'} ({len(sal_2023)} municipios)\n"
-
-    # TwoSlopeNorm viable (estimación rápida con muestra)
-    if len(paths_2023) > 0 and len(sal_2023) > 0:
-        try:
-            def _ds(p):
-                with open(p,'r',encoding='utf-8',errors='ignore') as f: l=f.readline()
-                return ";" if l.count(";")>l.count(",") else ","
-            df_s = pd.read_csv(paths_2023[0], sep=_ds(paths_2023[0]),
-                               dtype={"Contratos":float})
-            df_s.columns = df_s.columns.str.strip()
-            df_s = df_s.rename(columns={"Contratos":"c"})
-            df_s = df_s[df_s["sexo"].isin(["Hombres","Mujeres"])]
-            ratio_s = (df_s.groupby(["Municipio","sexo"])["c"]
-                       .sum().unstack("sexo").fillna(0))
-            ratio_s["r"] = ratio_s.get("Hombres",0)/(
-                ratio_s.get("Hombres",0)+ratio_s.get("Mujeres",0)+1e-9)
-            ok = bool((ratio_s["r"]>0.5).any()) and bool((ratio_s["r"]<0.5).any())
-            passed = passed and ok
-            report_md += f"- TwoSlopeNorm viable (muestra 1 mes): {'🟢' if ok else '⚠️'}\n"
-        except Exception as e:
-            report_md += f"- TwoSlopeNorm: ⚠️ no verificado ({e})\n"
-
-    return AssetCheckResult(
-        passed=bool(passed), severity=AssetCheckSeverity.WARN,
-        metadata={"check": MetadataValue.md(report_md)})
