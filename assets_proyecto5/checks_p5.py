@@ -11,7 +11,6 @@ from dagster import asset_check, AssetCheckResult, MetadataValue, AssetCheckSeve
 from assets import preprocesar_datos_p5, commitear_plots_a_github
 from plots_assets import (
     plot_actividad_barras,
-    plot_ocupacion_divergente,
     plot_brecha_salarial,
     plot_mapa_brecha_salarial,
     get_processed_path,
@@ -29,7 +28,6 @@ from plots_assets import (
     COLORES_ISLA,
     _load_rentas,
     _load_gini,
-    plot_actividad_barras_canarias,
     plot_ocupacion_divergente_canarias,
     _cargar_contratos,
     _filtrar_ambito,
@@ -143,7 +141,6 @@ MAX_CHARS_ANOTACION_MAPA = 20  # nombre de municipio anotado sobre el mapa
 # Nombres canónicos de los PNG que deben existir tras la ejecución
 PNG_ESPERADOS = [
     "actividad_barras.png",
-    "ocupacion_divergente.png",
     "brecha_salarial_lollipop.png",       # era slope, ahora lollipop
     "mapa_brecha_salarial.png",
     "gini_evolucion_islas.png",
@@ -787,64 +784,6 @@ def check_datos_actividad_barras(context):
         severity=AssetCheckSeverity.WARN,
         metadata={"Check_Actividad": MetadataValue.md(report_md)},
     )
-
-
-@asset_check(
-    asset=plot_ocupacion_divergente,
-    description="Precondiciones para plot_ocupacion_divergente.",
-)
-def check_datos_ocupacion_divergente(context):
-    """
-    Gestalt — Cierre: si falta un sexo para una ocupación, el pivot produce
-    NaN y la barra desaparece sin aviso (percepción de categoría ausente).
-    Gestalt — Simetría: si todos los valores son del mismo signo el gráfico
-    divergente pierde su razón de ser.
-    Gramática de gráficos: si el año configurado no existe en los datos el
-    plot sale vacío sin lanzar ningún error.
-    """
-    cfg  = get_plot_config()["ocupacion_divergente"]
-    df   = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["num_casos"])
-    passed = True
-    report_md = "### Precondiciones: ocupacion_divergente\n\n"
-
-    sexos = set(df["sexo"].dropna().unique()) if "sexo" in df.columns else set()
-    ok    = SEXOS_ESPERADOS.issubset(sexos)
-    passed = passed and ok
-    report_md += f"- Ambos sexos presentes: {'🟢' if ok else '🔴'} ({sexos})\n"
-
-    df_v = df[(df["sexo"].isin(SEXOS_ESPERADOS)) & (df["ocupacion"] != "No consta")]
-    pivot = df_v.groupby(["ocupacion", "sexo"])["num_casos"].sum().unstack("sexo")
-    incompletas = pivot[pivot.isna().any(axis=1)].index.tolist()
-    ok = len(incompletas) == 0
-    passed = passed and ok
-    report_md += f"- Pivot completo por ocupación: {'🟢' if ok else '🔴'} (incompletas: {incompletas or '–'})\n"
-
-    n_ocu = int(df_v["ocupacion"].nunique())
-    ok    = n_ocu >= 3
-    passed = passed and ok
-    report_md += f"- Ocupaciones válidas ≥ 3: {'🟢' if ok else '🔴'} ({n_ocu})\n"
-
-    brechas = pivot["Hombres"] - pivot["Mujeres"]
-    ok = bool((brechas > 0).any()) and bool((brechas < 0).any())
-    passed = passed and ok
-    report_md += f"- Divergencia real (+ y −): {'🟢' if ok else '🔴'}\n"
-
-    # BUG FIX: verificar que el año configurado (si existe) tiene datos
-    ano = cfg.get("ano", None)
-    if ano is not None and "año" in df.columns:
-        n_ano = int((df["año"] == ano).sum())
-        ok    = n_ano > 0
-        passed = passed and ok
-        report_md += f"- Año configurado ({ano}) con datos: {'🟢' if ok else '🔴'} ({n_ano} filas)\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Divergente": MetadataValue.md(report_md)},
-    )
-
-
-
 
 @asset_check(
     asset=plot_brecha_salarial,
@@ -2052,72 +1991,6 @@ def check_suficientes_anios_historico(context, preprocesar_datos_p5: str):
 
 
 @asset_check(
-    asset=plot_actividad_barras_canarias,
-    description=(
-        "Verifica ficheros del año configurado, cobertura del ámbito "
-        "seleccionado y actividades suficientes para el top-N."
-    ),
-)
-def check_actividad_barras_canarias(context):
-    cfg    = get_plot_config()["actividad_barras_canarias"]
-    AÑO    = cfg.get("ano", 2025)
-    AMBITO = cfg.get("ambito", "Canarias")
-    TOP_N  = cfg.get("top_n_actividades", 6)
-
-    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
-    passed   = True
-    md       = f"### Check: actividad_barras_canarias\n\n"
-    md      += (f"Configuración: `ano={AÑO}`, `ambito={AMBITO!r}`, "
-                f"`top_n={TOP_N}`\n\n")
-
-    df = _cargar_contratos(data_dir, AÑO)
-    if df is None:
-        return AssetCheckResult(
-            passed=False, severity=AssetCheckSeverity.WARN,
-            metadata={"check": MetadataValue.md(
-                f"🔴 No hay ficheros de contratos para {AÑO}.")},
-        )
-
-    try:
-        df_f = _filtrar_ambito(df, AMBITO)
-        md += f"- Ámbito `{AMBITO}` reconocido: 🟢\n"
-    except ValueError as e:
-        return AssetCheckResult(
-            passed=False, severity=AssetCheckSeverity.ERROR,
-            metadata={"check": MetadataValue.md(f"🔴 {e}")},
-        )
-
-    islas_esp  = set(_islas_en_ambito(AMBITO))
-    islas_pres = set(df_f[df_f["isla"].isin(ISLAS_VALIDAS)]["isla"].unique())
-    faltantes  = islas_esp - islas_pres
-    ok = len(faltantes) == 0
-    passed = passed and ok
-    md += f"- Islas del ámbito: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
-
-    sin_isla = df_f[~df_f["isla"].isin(ISLAS_VALIDAS)]["c"].sum()
-    pct_sin  = sin_isla / df_f["c"].sum() * 100 if df_f["c"].sum() > 0 else 0
-    ok = pct_sin < 5.0
-    passed = passed and ok
-    md += f"- Sin isla < 5%: {'🟢' if ok else '🔴'} ({pct_sin:.1f}%)\n"
-
-    df_f2 = df_f[~df_f["Actividad económica"].str.lower().str.contains(
-        "no consta|sin clasificar", na=False)]
-    n_act = df_f2["Actividad económica"].nunique()
-    ok    = n_act >= TOP_N
-    passed = passed and ok
-    md += f"- Actividades ≥ {TOP_N}: {'🟢' if ok else '🔴'} ({n_act})\n"
-
-    ok = {"Hombres","Mujeres"}.issubset(set(df_f["sexo"].unique()))
-    passed = passed and ok
-    md += f"- Ambos sexos: {'🟢' if ok else '🔴'}\n"
-
-    return AssetCheckResult(
-        passed=bool(passed), severity=AssetCheckSeverity.WARN,
-        metadata={"check": MetadataValue.md(md)},
-    )
-
-
-@asset_check(
     asset=plot_ocupacion_divergente_canarias,
     description=(
         "Verifica CNO11 válido, cobertura del ámbito y grupos con masa "
@@ -2188,4 +2061,4 @@ def check_ocupacion_divergente_canarias(context):
     return AssetCheckResult(
         passed=bool(passed), severity=AssetCheckSeverity.WARN,
         metadata={"check": MetadataValue.md(md)},
-    )
+    )
