@@ -143,16 +143,30 @@ ISLAS_ORDEN = [
 ]
 
 COLORES_ISLA = {
-    "Tenerife":      "#e07b39",
-    "Lanzarote":     "#e9c46a",
-    "Fuerteventura": "#f4a261",
-    "Gran Canaria":  "#a8c5da",
-    "La Palma":      "#b5c8b8",
-    "La Gomera":     "#c9b8d0",
-    "El Hierro":     "#d4c5b0",
+    "Tenerife":      "#2B5C8F",
+    "Gran Canaria":  "#3E9B8D",
+    "Lanzarote":     "#D65A31",
+    "Fuerteventura": "#E29734",
+    "La Palma":      "#4F8A3F",
+    "La Gomera":     "#A262A8",
+    "El Hierro":     "#8C7864",
 }
 
 COLOR_RESTO_ISLAS = "#b0bec5"
+
+
+def get_colores_isla():
+    try:
+        cfg = get_plot_config().get("colores_islas", {})
+        if cfg:
+            merged = COLORES_ISLA.copy()
+            for k, v in cfg.items():
+                if k in merged:
+                    merged[k] = v
+            return merged
+    except Exception:
+        pass
+    return COLORES_ISLA
 
 
 def _load_gini() -> pd.DataFrame:
@@ -428,9 +442,11 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     context.log.info(f"Top {top_n_islas} Gini en {ultimo_año}: {TOP_N_ISLAS}")
 
     AÑOS = sorted(df["TIME_PERIOD"].unique())
+    colores = get_colores_isla()
 
     fig, ax = plt.subplots(figsize=(13, 6))
     fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
     ax.axvspan(2019.5, 2021.5, color="#fde8e8", alpha=0.45, zorder=0)
     ax.axvline(2020, color="#c0392b", lw=0.8, ls="--", alpha=0.5, zorder=1)
@@ -440,7 +456,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 
     for isla in df["TERRITORIO"].unique():
         sub    = df[df["TERRITORIO"] == isla].sort_values("TIME_PERIOD")
-        col    = COLORES_ISLA.get(isla, "#aaaaaa")
+        col    = colores.get(isla, "#aaaaaa")
         is_top = isla in TOP_N_ISLAS
         ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
                 color=col if is_top else COLOR_RESTO_ISLAS,
@@ -466,7 +482,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 
     handles = [
         mpatches.Patch(
-            color=COLORES_ISLA.get(i, "#aaaaaa"),
+            color=colores.get(i, "#aaaaaa"),
             label=f"{i}  ({df[df['TERRITORIO']==i].sort_values('TIME_PERIOD')['OBS_VALUE'].iloc[-1]:.1f})"
         )
         for i in TOP_N_ISLAS
@@ -549,15 +565,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     }
 
     # Colores por isla coherentes con el proyecto
-    COLORES_ISLAS = {
-        "Tenerife":      "#e07b39",
-        "Lanzarote":     "#e9c46a",
-        "Fuerteventura": "#f4a261",
-        "Gran Canaria":  "#a8c5da",
-        "La Palma":      "#b5c8b8",
-        "La Gomera":     "#c9b8d0",
-        "El Hierro":     "#d4c5b0",
-    }
+    COLORES_ISLAS = get_colores_isla()
 
     # ── Preparar datos ────────────────────────────────────────────────────────
     pivot = (
@@ -741,10 +749,11 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
                                   label="Resto de islas"))
 
 
+    colores = get_colores_isla()
     for isla in ["Tenerife", "Fuerteventura", "Lanzarote"]:
         sub = rentas[(rentas["TERRITORIO"] == isla) &
                      (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
-        col = COLORES_ISLA[isla]
+        col = colores[isla]
         ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
                 color=col, lw=3.0, marker="o", markersize=6,
                 alpha=1.0, zorder=4)

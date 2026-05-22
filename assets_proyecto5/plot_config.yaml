@@ -12,6 +12,16 @@ paleta:
   # Descomenta para forzar uno de matplotlib:
   # cmap_brecha: "RdBu_r"
 
+# Colores de las islas: personalización de la identidad visual de cada isla
+colores_islas:
+  Tenerife: "#2B5C8F"
+  Gran Canaria: "#3E9B8D"
+  Lanzarote: "#D65A31"
+  Fuerteventura: "#E29734"
+  La Palma: "#4F8A3F"
+  La Gomera: "#A262A8"
+  El Hierro: "#8C7864"
+
 # ── Assets existentes ─────────────────────────────────────────────────────────
 
 distribucion_lineas:
