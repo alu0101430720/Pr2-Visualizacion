@@ -338,21 +338,17 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     top = slope.loc[top_idx].sort_values("delta", key=abs, ascending=True)
 
     # Preparar datos en formato LONG (se incluye 'delta' para mantener el orden en el eje Y)
+    # Preparar datos en formato long con rol ini/fin
     top_long = pd.concat([
         top[["municipio", "brecha_ini", "direccion", "delta"]].rename(columns={"brecha_ini": "valor"}).assign(momento="ini"),
         top[["municipio", "brecha_fin", "direccion", "delta"]].rename(columns={"brecha_fin": "valor"}).assign(momento="fin"),
     ])
 
-    COLORES = {
-        "Brecha aumenta":       pal["BH"],
-        "Brecha disminuye":     pal["BM"],
-        "Sin cambio relevante": "#AAAAAA",
-    }
-
     p = (
-        ggplot(top_long, aes(x="valor", y="reorder(municipio, delta)", color="direccion"))
+        # Removemos el color global de aes() para controlarlo capa por capa
+        ggplot(top_long, aes(x="valor", y="reorder(municipio, delta)"))
 
-        # Segmento horizontal que conecta el inicio con el fin
+        # 1. Segmento que conecta ini → fin (con el color de la dirección)
         + geom_segment(
             data=top,
             mapping=aes(x="brecha_ini", xend="brecha_fin",
@@ -361,19 +357,23 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             size=1.2, alpha=0.5,
             inherit_aes=False,
         )
-        # Punto de inicio: Año Inicial (círculo hueco)
+        
+        # 2. Punto de inicio (2021): Gris neutro y hueco (Punto de partida)
         + geom_point(data=top_long[top_long["momento"] == "ini"],
-                     size=3, shape="o", fill="white", stroke=1.2)
-        # Punto de fin: Año Final (círculo relleno)
+                    color="#999999", size=3, shape="o", fill="white", stroke=1.2)
+        
+        # 3. Punto de fin (2023): Color de la dirección y relleno (Resultado actual)
         + geom_point(data=top_long[top_long["momento"] == "fin"],
-                     size=4)
+                    aes(color="direccion"), size=4)
 
+        # Líneas de referencia y escalas
         + geom_vline(xintercept=0, linetype="dashed", color="#cccccc", size=0.5)
         + scale_color_manual(values=COLORES, name=None)
+        
         + labs(
             title="Cambio en brecha salarial por municipio",
-            subtitle=f"○ = {AÑO_INI}   ● = {AÑO_FIN}  ·  Top {TOP_N} por mayor variación",
-            x="Índice de brecha salarial", y=None,
+            subtitle=f"○ = {AÑO_INI} (Origen)  ·  ● = {AÑO_FIN} (Destino)  ·  Top {TOP_N} por variación",
+            x="Índice de brecha salarial",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
         + theme_minimal()
@@ -382,6 +382,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
             panel_grid_major_y=element_blank(),
+            axis_title_y=element_blank(),  # <<-- FIX: Elimina por completo el texto genérico del eje Y
             legend_position="bottom",
         )
     )
