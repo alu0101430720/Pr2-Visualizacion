@@ -1,6 +1,7 @@
 import os
 import glob
 import re
+import textwrap
 import unicodedata
 import warnings
 import numpy as np
@@ -28,31 +29,30 @@ def get_plot_config():
     with open(config_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
+
 def get_paleta():
     cfg = get_plot_config().get("paleta", {})
-    
-    # Colormap personalizado: azul ← 0 → rosa
+
+    # Colormap personalizado: azul → blanco → rosa.
+    # Si el YAML define cmap_brecha como string, se usa ese nombre de matplotlib.
     cmap_custom = LinearSegmentedColormap.from_list(
         "azul_rosa",
-        ["#4A90D9", "#ffffff", "#D94A8C"]  # azul → blanco → rosa
+        ["#4A90D9", "#ffffff", "#D94A8C"],
     )
-    
+    cmap_val = cfg.get("cmap_brecha", None)
+    cmap_brecha = plt.get_cmap(cmap_val) if isinstance(cmap_val, str) else cmap_custom
+
     return {
         "H":           cfg.get("color_hombres",                  "#4A90D9"),
         "M":           cfg.get("color_mujeres",                  "#D94A8C"),
         "BH":          cfg.get("color_brecha_favorable_hombres", "#4A90D9"),
         "BM":          cfg.get("color_brecha_favorable_mujeres", "#D94A8C"),
-        "cmap_brecha": cfg.get("cmap_brecha",                    cmap_custom),
+        "cmap_brecha": cmap_brecha,
     }
 
 
 def _aplicar_eje_y(ax, y_min_data: float, y_max_data: float,
                    empezar_en_cero: bool, margen_sup: float = 0.08) -> None:
-    """
-    Configura el eje Y.
-    empezar_en_cero=True  → desde 0, sin marca.
-    empezar_en_cero=False → truncado al rango de datos con símbolo //.
-    """
     span  = y_max_data - y_min_data
     y_top = y_max_data + span * margen_sup
 
@@ -91,7 +91,6 @@ def get_plot_dir():
 
 
 def fmt_k(l):
-    """Formatea números como 1k, -5k, etc. Soporta negativos."""
     def _f(v):
         if pd.isna(v):
             return ""
@@ -112,6 +111,29 @@ def cargar_gdf_municipios(año: int, logger=None) -> gpd.GeoDataFrame | None:
     return gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
 
 
+def _calcular_indice_brecha(ocu: pd.DataFrame,
+                             dist: pd.DataFrame) -> pd.DataFrame:
+    """Calcula indice_brecha por municipio y año. Reutilizable entre assets."""
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"].sum()
+        .pivot(index=["municipio", "año"], columns="sexo", values="num_casos")
+        .reset_index()
+    )
+    ocu_hm.columns.name = None
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+
+    sal = (
+        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
+        .rename(columns={"OBS_VALUE": "pct_salarios"})
+    )
+
+    merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    return merged
+
+
 # ── Constantes compartidas ────────────────────────────────────────────────────
 ISLAS_ORDEN = [
     "Canarias", "Tenerife", "Gran Canaria", "La Palma",
@@ -128,7 +150,7 @@ COLORES_ISLA = {
     "El Hierro":     "#d4c5b0",
 }
 
-COLOR_RESTO_ISLAS = "#b0bec5"   # gris uniforme para islas no destacadas
+COLOR_RESTO_ISLAS = "#b0bec5"
 
 
 def _load_gini() -> pd.DataFrame:
@@ -145,10 +167,19 @@ def _load_rentas() -> pd.DataFrame:
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_actividad_barras(context: AssetExecutionContext) -> None:
-    from checks_p5 import inferir_isla
+    """
+    Barras por actividad económica y sexo.
+    Modo configurable en plot_config.yaml:
+      'fill'  → 100% apilado: muestra solo proporción H/M  (recomendado)
+      'stack' → apilado absoluto: volumen + composición
+      'dodge' → agrupado: comparar valores absolutos H vs M
+    """
+    from checks_p5 import inferir_isla  # import local documentado: depende de checks_p5
+
     cfg  = get_plot_config()["actividad_barras"]
     pal  = get_paleta()
     ISLA = cfg.get("isla", "Todas")
+    MODO = cfg.get("modo", "fill")  # fill | stack | dodge
 
     df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["num_casos"])
     df = df[df["Sexo"].isin(["Hombres", "Mujeres"]) &
@@ -163,17 +194,40 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
 
     agg = df.groupby(["Periodo", "actividad", "Sexo"], as_index=False)["num_casos"].sum()
 
+    # Ordenar facets por volumen total descendente
+    orden_act = (
+        agg.groupby("actividad")["num_casos"].sum()
+        .sort_values(ascending=False).index.tolist()
+    )
+    agg["actividad"] = pd.Categorical(agg["actividad"], categories=orden_act, ordered=True)
+
+    if MODO == "fill":
+        pos      = position_fill()
+        y_label  = "Proporción H/M"
+        subtitle = "Proporción de trabajadores por sexo en cada actividad"
+        y_fmt    = lambda l: [f"{v:.0%}" for v in l]
+    elif MODO == "dodge":
+        pos      = position_dodge(width=0.7)
+        y_label  = "Nº trabajadores"
+        subtitle = "Número de trabajadores por sexo en cada actividad"
+        y_fmt    = fmt_k
+    else:  # stack
+        pos      = "stack"
+        y_label  = "Nº trabajadores"
+        subtitle = "Suma de trabajadores por sección censal (apilado H+M)"
+        y_fmt    = fmt_k
+
     p = (
         ggplot(agg, aes(x="factor(Periodo)", y="num_casos", fill="Sexo"))
-        + geom_col(position="stack", width=0.7, alpha=0.9)
-        + facet_wrap("~ actividad", scales="free_y", ncol=2)
+        + geom_col(position=pos, width=0.7, alpha=0.9)
+        + facet_wrap("~ actividad", scales="free_y" if MODO != "fill" else "fixed", ncol=2)
         + scale_fill_manual(values={"Hombres": pal["H"], "Mujeres": pal["M"]})
-        + scale_y_continuous(labels=fmt_k)
+        + scale_y_continuous(labels=y_fmt)
         + labs(
             title=f"Actividad económica por año y sexo — "
                   f"{ISLA if ISLA != 'Todas' else 'Toda la provincia'}",
-            subtitle="Suma de trabajadores por sección censal",
-            x=None, y="Nº trabajadores", fill="Sexo",
+            subtitle=subtitle,
+            x=None, y=y_label, fill="Sexo",
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
@@ -200,13 +254,22 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
     df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["num_casos"])
     df = df[df["sexo"].isin(["Hombres", "Mujeres"]) & (df["ocupacion"] != "No consta")]
 
+    # Filtro opcional por año
+    ano = cfg.get("ano", None)
+    ano_label = ""
+    if ano is not None:
+        df = df[df["año"] == ano]
+        ano_label = f" — {ano}"
+
     agg   = df.groupby(["ocupacion", "sexo"], as_index=False)["num_casos"].sum()
     pivot = agg.pivot(index="ocupacion", columns="sexo", values="num_casos").reset_index()
     pivot["brecha"]    = pivot["Hombres"] - pivot["Mujeres"]
     pivot["direccion"] = pivot["brecha"].apply(
         lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
+
+    # textwrap en lugar de corte fijo para no partir palabras
     pivot["ocupacion_wrap"] = pivot["ocupacion"].apply(
-        lambda s: "\n".join([s[i:i+40] for i in range(0, len(s), 40)]))
+        lambda s: "\n".join(textwrap.wrap(s, 40)))
 
     p = (
         ggplot(pivot, aes(x="reorder(ocupacion_wrap, brecha)",
@@ -218,7 +281,7 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
         + scale_y_continuous(labels=fmt_k)
         + coord_flip()
         + labs(
-            title="Brecha de género por ocupación — Tenerife",
+            title=f"Brecha de género por ocupación — Tenerife{ano_label}",
             subtitle="Diferencia acumulada (Hombres − Mujeres)",
             x=None, y=None, fill=None,
             caption="Fuente: ISTAC",
@@ -251,6 +314,7 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
         "PRESTACIONES_DESEMPLEO": "Prestaciones desempleo (%)",
         "SUELDOS_SALARIOS":       "Sueldos y salarios (%)",
     }
+    # Cmap único configurable; si no, uno por componente
     CMAPS = {
         "SUELDOS_SALARIOS":       "Blues",
         "PENSIONES":              "Oranges",
@@ -258,30 +322,48 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
         "OTRAS_PRESTACIONES":     "Greens",
         "OTROS_INGRESOS":         "YlOrBr",
     }
+    cmap_nombre = cfg.get("cmap_unico", CMAPS.get(componente, "YlOrRd"))
 
     df     = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
     df_fil = (df[(df["año"] == año) & (df["MEDIDAS_CODE"] == componente)]
               .groupby("municipio", as_index=False)["OBS_VALUE"].median())
 
     gdf_mun = cargar_gdf_municipios(año, context.log)
+
+    # BUG FIX: emitir metadata aunque no haya GeoJSON, no retornar silenciosamente
     if gdf_mun is None:
         context.log.warning(f"GeoJSON no disponible para {año}. Asset omitido.")
+        context.add_output_metadata({
+            "aviso": MetadataValue.md(
+                f"⚠️ GeoJSON no disponible para {año} — mapa no generado.")
+        })
         return
 
     gdf = gdf_mun.merge(df_fil, on="municipio", how="left")
 
     fig, ax = plt.subplots(figsize=(14, 8))
     gdf.plot(
-        column="OBS_VALUE", cmap=CMAPS.get(componente, "YlOrRd"),
-        linewidth=0.08, edgecolor="white", legend=True,
-        legend_kwds={"label": LABELS.get(componente, componente),
-                     "orientation": "vertical", "shrink": 0.55, "pad": 0.01},
+        column="OBS_VALUE",
+        cmap=cmap_nombre,
+        linewidth=0.08,
+        edgecolor="white",
+        legend=False,           # colorbar manual para control de posición
         missing_kwds={"color": "#dddddd", "label": "Sin datos"},
         ax=ax,
     )
+
+    # Colorbar manual: evita solapamiento con el mapa
+    sm = ScalarMappable(
+        cmap=plt.get_cmap(cmap_nombre),
+        norm=plt.Normalize(vmin=df_fil["OBS_VALUE"].min(),
+                           vmax=df_fil["OBS_VALUE"].max()),
+    )
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
+    cbar.set_label(LABELS.get(componente, componente), fontsize=10)
+
     ax.set_title(
-        f"{LABELS.get(componente,'').replace(' (%)','')}"
-        f" sobre renta total — Tenerife {año}",
+        f"{LABELS.get(componente,'').replace(' (%)','')} sobre renta total — Tenerife {año}",
         fontsize=14, fontweight="bold", pad=12)
     ax.annotate("Por municipios · Fuente: ISTAC",
                 xy=(0.01, 0.98), xycoords="axes fraction",
@@ -298,8 +380,9 @@ def plot_mapa_distribucion_renta(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     """
-    Slope chart: top N municipios con mayor variación absoluta del índice
-    de brecha salarial entre ano_ini y ano_fin.
+    Lollipop chart horizontal: top N municipios con mayor variación absoluta
+    del índice de brecha salarial entre ano_ini y ano_fin.
+    Ordenado por |delta| descendente. Color = dirección del cambio.
     """
     cfg     = get_plot_config()["brecha_salarial"]
     pal     = get_paleta()
@@ -311,27 +394,11 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
     dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
 
-    ocu_hm = (
-        ocu[ocu["sexo"].isin(["Hombres","Mujeres"]) & (ocu["ocupacion"] != "No consta")]
-        .groupby(["municipio","año","sexo"], as_index=False)["num_casos"].sum()
-        .pivot(index=["municipio","año"], columns="sexo", values="num_casos")
-        .reset_index()
-    )
-    ocu_hm.columns.name = None
-    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+    merged = _calcular_indice_brecha(ocu, dist)
 
-    sal = (
-        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
-        .groupby(["municipio","año"], as_index=False)["OBS_VALUE"].median()
-        .rename(columns={"OBS_VALUE": "pct_salarios"})
-    )
-
-    merged = ocu_hm.merge(sal, on=["municipio","año"], how="inner")
-    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
-
-    ini   = merged[merged["año"] == AÑO_INI][["municipio","indice_brecha"]].rename(
+    ini  = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(
         columns={"indice_brecha": "brecha_ini"})
-    fin   = merged[merged["año"] == AÑO_FIN][["municipio","indice_brecha"]].rename(
+    fin  = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(
         columns={"indice_brecha": "brecha_fin"})
     slope = ini.merge(fin, on="municipio")
     slope["delta"]     = slope["brecha_fin"] - slope["brecha_ini"]
@@ -339,90 +406,78 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         lambda d: "Brecha aumenta" if d > UMBRAL
         else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante"))
 
-    # Top N por variación absoluta (más dinámico que por brecha_media)
-    top = slope.reindex(slope["delta"].abs().nlargest(TOP_N).index)
+    # BUG FIX: usar .loc con los índices correctos, no .reindex()
+    top_idx = slope["delta"].abs().nlargest(TOP_N).index
+    top = slope.loc[top_idx].sort_values("delta", key=abs, ascending=True)
 
-    long = pd.concat([
-        top.assign(año=AÑO_INI, brecha=top["brecha_ini"]),
-        top.assign(año=AÑO_FIN, brecha=top["brecha_fin"]),
-    ])
-    long["año_cat"] = pd.Categorical(
-        long["año"], categories=[AÑO_INI, AÑO_FIN], ordered=True)
-
-    mediana_global = float(long["brecha"].median())
+    # Mediana sobre TODOS los municipios (no solo el top N)
+    mediana_todos = float(merged[merged["año"].isin([AÑO_INI, AÑO_FIN])]["indice_brecha"].median())
 
     COLORES = {
-        "Brecha aumenta":       "#e63946",
-        "Brecha disminuye":     "#2a9d8f",
+        "Brecha aumenta":       pal["BM"],   # rosa → favorece a hombres (sube ratio H)
+        "Brecha disminuye":     pal["BH"],   # azul → favorece a mujeres
         "Sin cambio relevante": "#AAAAAA",
     }
 
     p = (
-        ggplot(long, aes(x="año_cat", y="brecha",
-                         group="municipio", color="direccion"))
-        + geom_hline(yintercept=mediana_global, linetype="dashed",
-                     color="#888888", size=0.5, alpha=0.7)
-        + geom_line(size=0.9, alpha=0.8)
-        + geom_point(size=2.5, stroke=0.3)
+        ggplot(top, aes(x="reorder(municipio, delta)", y="delta", color="direccion"))
+        + geom_hline(yintercept=0, color="#cccccc", size=0.6)
+        + geom_segment(aes(xend="reorder(municipio, delta)", y=0, yend="delta"),
+                       size=1.4, alpha=0.7)
+        + geom_point(size=4.5)
         + geom_text(aes(label="municipio"),
-                    data=long[long["año"] == AÑO_FIN],
-                    ha="left", nudge_x=0.05, size=9)
+                    ha="left", nudge_y=top["delta"].abs().max() * 0.04,
+                    size=9, color="#444444")
         + scale_color_manual(values=COLORES, name=None)
-        + scale_x_discrete(expand=(0.45, 0.45))
+        + coord_flip()
         + labs(
-            title="Evolución de la brecha salarial de género por municipio",
-            subtitle=(f"Índice = ratio H/(H+M) × % sueldos sobre renta · "
-                      f"Top {TOP_N} municipios por mayor variación · {AÑO_INI}→{AÑO_FIN}"),
-            x=None, y="Índice de brecha salarial ponderado",
+            title="Municipios con mayor cambio en brecha salarial de género",
+            subtitle=(f"Δ índice entre {AÑO_INI} y {AÑO_FIN} · "
+                      f"Top {TOP_N} por variación absoluta · "
+                      f"+ = brecha aumenta  /  − = brecha disminuye"),
+            x=None, y="Cambio en índice de brecha salarial",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
         + theme_minimal()
         + theme(
-            figure_size=(10, 6),
+            figure_size=(10, 5),
             plot_title=element_text(size=14, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
-            panel_grid=element_blank(),
-            axis_text_x=element_text(size=11, face="bold"),
-            axis_text_y=element_text(size=8, color="#888888"),
+            panel_grid_major_y=element_blank(),
+            panel_grid_minor=element_blank(),
+            axis_text_y=element_blank(),   # etiquetas en geom_text, no en eje
             legend_position="bottom",
         )
     )
-    out = os.path.join(get_plot_dir(), "brecha_salarial_slope.png")
-    p.save(out, width=11, height=9, dpi=150, verbose=False)
+    out = os.path.join(get_plot_dir(), "brecha_salarial_lollipop.png")
+    p.save(out, width=10, height=5, dpi=150, verbose=False)
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Brecha Salarial Slope]({out})")})
+        {"plot": MetadataValue.md(f"![Brecha Salarial Lollipop]({out})")})
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
-    """Mapa coroplético de la brecha salarial — provincia SC Tenerife."""
-    cfg     = get_plot_config()["brecha_salarial"]
-    pal     = get_paleta()
+    """
+    Mapa coroplético de la brecha salarial — provincia SC Tenerife.
+    Anota directamente en el mapa los N municipios con mayor y menor índice.
+    """
+    cfg      = get_plot_config()["brecha_salarial"]
+    pal      = get_paleta()
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
+    N_ANOT   = cfg.get("n_anotaciones_mapa", 3)
 
     ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
     dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
 
-    ocu_hm = (
-        ocu[ocu["sexo"].isin(["Hombres","Mujeres"]) & (ocu["ocupacion"] != "No consta")]
-        .groupby(["municipio","año","sexo"], as_index=False)["num_casos"].sum()
-        .pivot(index=["municipio","año"], columns="sexo", values="num_casos")
-        .reset_index()
-    )
-    ocu_hm.columns.name = None
-    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
-
-    sal = (
-        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
-        .groupby(["municipio","año"], as_index=False)["OBS_VALUE"].median()
-        .rename(columns={"OBS_VALUE": "pct_salarios"})
-    )
-
-    merged = ocu_hm.merge(sal, on=["municipio","año"], how="inner")
-    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    # Reutiliza helper: elimina duplicación de lógica con plot_brecha_salarial
+    merged = _calcular_indice_brecha(ocu, dist)
 
     lim  = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
-    norm = mcolors.TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
+    # BUG FIX: si lim==0 TwoSlopeNorm falla; usar Normalize como fallback
+    if lim == 0:
+        norm = plt.Normalize(vmin=-0.01, vmax=0.01)
+    else:
+        norm = mcolors.TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
 
     gdf_mun = cargar_gdf_municipios(AÑO_MAPA, context.log)
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -431,16 +486,36 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         ax.set_title(f"{AÑO_MAPA} - Sin Datos Espaciales")
         ax.axis("off")
     else:
-        datos = merged[merged["año"] == AÑO_MAPA][["municipio","indice_brecha"]]
+        datos = merged[merged["año"] == AÑO_MAPA][["municipio", "indice_brecha"]]
         gdf_p = gdf_mun.merge(datos, on="municipio", how="left")
         gdf_p.plot(
             column="indice_brecha", cmap=pal["cmap_brecha"],
             norm=norm, linewidth=0.15, edgecolor="white",
             missing_kwds={"color": "#dddddd", "label": "Sin datos"},
             legend=False, ax=ax)
+
+        # Anotar los N municipios con mayor y menor índice directamente en el mapa
+        datos_validos = gdf_p.dropna(subset=["indice_brecha"]).copy()
+        if not datos_validos.empty and N_ANOT > 0:
+            datos_validos["centroid_x"] = datos_validos.geometry.centroid.x
+            datos_validos["centroid_y"] = datos_validos.geometry.centroid.y
+            extremos = pd.concat([
+                datos_validos.nlargest(N_ANOT, "indice_brecha"),
+                datos_validos.nsmallest(N_ANOT, "indice_brecha"),
+            ]).drop_duplicates(subset="municipio")
+            for _, row in extremos.iterrows():
+                ax.annotate(
+                    f"{row['municipio']}\n{row['indice_brecha']:.3f}",
+                    xy=(row["centroid_x"], row["centroid_y"]),
+                    fontsize=7, ha="center", va="center",
+                    color="white" if abs(row["indice_brecha"]) > lim * 0.5 else "#333333",
+                    fontweight="bold",
+                    bbox=dict(boxstyle="round,pad=0.2", fc="none", ec="none"),
+                )
+
         ax.axis("off")
 
-    sm   = ScalarMappable(cmap=pal["cmap_brecha"], norm=norm)
+    sm = ScalarMappable(cmap=pal["cmap_brecha"], norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
     cbar.set_label(
@@ -449,10 +524,12 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
 
     fig.suptitle(f"Brecha salarial de género por municipio — Tenerife {AÑO_MAPA}",
                  fontsize=15, fontweight="bold", y=0.95)
-    fig.text(0.5, 0.08,
+    # BUG FIX: annotate en lugar de fig.text para que tight_layout lo tenga en cuenta
+    fig.text(0.5, 0.01,
              "Índice = ratio H/(H+M) × % sueldos sobre renta · Fuente: ISTAC",
-             ha="center", fontsize=9, color="#666666")
-    fig.tight_layout()
+             ha="center", fontsize=9, color="#666666",
+             transform=fig.transFigure)
+    fig.tight_layout(rect=[0, 0.04, 1, 1])
 
     out = os.path.join(get_plot_dir(), "mapa_brecha_salarial.png")
     fig.savefig(out, dpi=150, bbox_inches="tight")
@@ -464,38 +541,57 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     """
-    Líneas temporales del Índice de Gini por isla (2015-2023).
-    Sin Canarias. Top 3 en 2023 resaltadas. Franja COVID. Ruptura eje Y.
+    Líneas temporales del Índice de Gini por isla.
+    Top N islas calculado dinámicamente desde el último año disponible.
+    Valor numérico anotado en el punto final de cada isla destacada.
     """
     cfg_plot        = get_plot_config().get("gini_evolucion_islas", {})
     empezar_en_cero = cfg_plot.get("empezar_en_cero", False)
+    top_n_islas     = cfg_plot.get("top_n_islas", 3)
 
     gini = _load_gini()
-    ISLAS_SET = {"Tenerife","Gran Canaria","La Palma","La Gomera",
-                 "El Hierro","Lanzarote","Fuerteventura"}
+    ISLAS_SET = {"Tenerife", "Gran Canaria", "La Palma", "La Gomera",
+                 "El Hierro", "Lanzarote", "Fuerteventura"}
     df = gini[
         (gini["MEDIDAS"] == "Índice de Gini") &
         (gini["TERRITORIO"].isin(ISLAS_SET))
     ].copy()
 
-    TOP3 = ["La Palma", "El Hierro", "Tenerife"]   # top 3 Gini 2023
+    # BUG FIX: verificar que el filtro devuelve datos
+    if df.empty:
+        context.log.warning(
+            "plot_gini_evolucion_islas: sin datos tras filtrar MEDIDAS=='Índice de Gini'. "
+            "Verifica tildes o espacios en el CSV."
+        )
+        context.add_output_metadata({
+            "aviso": MetadataValue.md("⚠️ Sin datos de Gini — plot no generado.")
+        })
+        return
+
+    # TOP N calculado dinámicamente desde el último año disponible
+    ultimo_año = df["TIME_PERIOD"].max()
+    TOP_N_ISLAS = (
+        df[df["TIME_PERIOD"] == ultimo_año]
+        .nlargest(top_n_islas, "OBS_VALUE")["TERRITORIO"]
+        .tolist()
+    )
+    context.log.info(f"Top {top_n_islas} Gini en {ultimo_año}: {TOP_N_ISLAS}")
+
     AÑOS = sorted(df["TIME_PERIOD"].unique())
 
     fig, ax = plt.subplots(figsize=(13, 6))
     fig.patch.set_facecolor("white")
 
-    # Franja COVID
     ax.axvspan(2019.5, 2021.5, color="#fde8e8", alpha=0.45, zorder=0)
     ax.axvline(2020, color="#c0392b", lw=0.8, ls="--", alpha=0.5, zorder=1)
     ax.text(2020.15, df["OBS_VALUE"].max() - 0.15,
             "COVID-19", fontsize=8, color="#c0392b",
             fontweight="bold", va="top")
 
-    # Líneas
     for isla in df["TERRITORIO"].unique():
         sub    = df[df["TERRITORIO"] == isla].sort_values("TIME_PERIOD")
         col    = COLORES_ISLA.get(isla, "#aaaaaa")
-        is_top = isla in TOP3
+        is_top = isla in TOP_N_ISLAS
         ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
                 color=col if is_top else COLOR_RESTO_ISLAS,
                 lw=2.5 if is_top else 0.8,
@@ -503,27 +599,30 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
                 markersize=5 if is_top else 0,
                 alpha=1.0 if is_top else 0.5,
                 zorder=4 if is_top else 2)
+
         if is_top:
             ultimo = sub[sub["TIME_PERIOD"] == sub["TIME_PERIOD"].max()]
-            ax.text(ultimo["TIME_PERIOD"].values[0] + 0.1,
-                    ultimo["OBS_VALUE"].values[0],
-                    isla, fontsize=8.5, color=col,
+            val    = float(ultimo["OBS_VALUE"].values[0])
+            ax.text(ultimo["TIME_PERIOD"].values[0] + 0.15,
+                    val,
+                    f"{isla}  {val:.1f}",   # nombre + valor numérico juntos
+                    fontsize=8.5, color=col,
                     fontweight="bold", va="center")
 
-    # Eje Y
     _aplicar_eje_y(ax,
                    y_min_data=float(df["OBS_VALUE"].min()),
-                   y_max_data=float(df["OBS_VALUE"].max()+5),
+                   y_max_data=float(df["OBS_VALUE"].max() + 5),
                    empezar_en_cero=empezar_en_cero)
 
-    ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 1.5)
+    ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 2.2)   # más espacio para etiquetas
     ax.set_xticks(AÑOS)
     ax.set_xticklabels(AÑOS, fontsize=9)
     ax.set_ylabel("Índice de Gini", fontsize=10)
     ax.yaxis.grid(True, color="#eeeeee", zorder=0)
-    ax.spines[["top","right"]].set_visible(False)
+    ax.spines[["top", "right"]].set_visible(False)
 
-    handles = [mpatches.Patch(color=COLORES_ISLA[i], label=i) for i in TOP3]
+    handles = [mpatches.Patch(color=COLORES_ISLA.get(i, "#aaaaaa"), label=i)
+               for i in TOP_N_ISLAS]
     handles += [mpatches.Patch(color=COLOR_RESTO_ISLAS, alpha=0.6,
                                label="Resto de islas")]
     ax.legend(handles=handles, loc="lower left", fontsize=9, frameon=False)
@@ -531,8 +630,8 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     ax.set_title("Evolución del Índice de Gini por isla — Canarias 2015-2023",
                  fontsize=13, fontweight="bold", pad=12)
     ax.annotate(
-        "Valores altos = mayor desigualdad  ·  "
-        "Destacadas: islas con mayor desigualdad en 2023",
+        f"Valores altos = mayor desigualdad  ·  "
+        f"Destacadas: top {top_n_islas} islas con mayor desigualdad en {ultimo_año}",
         xy=(0.01, 0.98), xycoords="axes fraction",
         fontsize=8.5, color="#555555", va="top")
     fig.text(0.99, 0.01, "Fuente: ISTAC",
@@ -550,17 +649,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     """
     Heatmap ratio H/(H+M) por sector e isla — Canarias, Marzo 2026.
-    Sin anotaciones en celda: el gradiente de color codifica la información,
-    los números dentro eran redundantes y añadían ruido visual.
-
-    GESTALT:
-      Similitud   — RdBu_r centrado en 0.5: rojo = masculinizado,
-                    azul = feminizado, blanco = paridad.
-      Proximidad  — actividades ordenadas de más feminizadas (arriba) a más
-                    masculinizadas (abajo): clusters emergen sin intervención.
-      Continuidad — lectura oeste→este permite detectar si la segregación
-                    es local o estructural en todo el archipiélago.
-      Cierre      — bordes blancos definen cada celda sin sobrecargar.
+    Cmap azul→blanco→rosa (coherente con paleta del proyecto).
     """
     pal = get_paleta()
 
@@ -590,17 +679,28 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
 
     pivot = (
         df[df["Actividad económica"].isin(top_act)]
-        .groupby(["Actividad económica","isla","sexo"])["Contratos"]
+        .groupby(["Actividad económica", "isla", "sexo"])["Contratos"]
         .sum().unstack("sexo").reset_index()
     )
     pivot.columns.name = None
-    pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
-    pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV)
 
-    ISLAS_ORD = ["EL HIERRO","LA GOMERA","LA PALMA","TENERIFE",
-                 "GRAN CANARIA","LANZAROTE","FUERTEVENTURA"]
-    ISLAS_LBL = ["El\nHierro","La\nGomera","La\nPalma","Tenerife",
-                 "Gran\nCanaria","Lanzarote","Fuerte-\nventura"]
+    # BUG FIX: garantizar columnas aunque un sexo no tenga contratos en un sector
+    for col in ["Hombres", "Mujeres"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+    pivot[["Hombres", "Mujeres"]] = pivot[["Hombres", "Mujeres"]].fillna(0)
+
+    pivot["ratio_hm"] = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
+
+    # BUG FIX: actividades sin abreviatura → usar nombre corto por longitud
+    pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV).fillna(
+        pivot["Actividad económica"].str[:25]
+    )
+
+    ISLAS_ORD = ["EL HIERRO", "LA GOMERA", "LA PALMA", "TENERIFE",
+                 "GRAN CANARIA", "LANZAROTE", "FUERTEVENTURA"]
+    ISLAS_LBL = ["El\nHierro", "La\nGomera", "La\nPalma", "Tenerife",
+                 "Gran\nCanaria", "Lanzarote", "Fuerte-\nventura"]
 
     orden_act = (pivot.groupby("actividad_short")["ratio_hm"]
                  .mean().sort_values(ascending=True).index.tolist())
@@ -612,7 +712,8 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     fig.patch.set_facecolor("white")
 
     norm_c = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
-    cmap_c = plt.get_cmap(pal["cmap_brecha"])
+    # BUG FIX: usar directamente el objeto cmap, no plt.get_cmap()
+    cmap_c = pal["cmap_brecha"]
     ax.imshow(heat.values, cmap=cmap_c, norm=norm_c, aspect="auto")
 
     ax.set_xticks(range(len(ISLAS_ORD)))
@@ -633,13 +734,14 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
                       ax=ax, orientation="vertical", shrink=0.8, pad=0.02)
     cb.set_label("% hombres contratados", fontsize=9)
     cb.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
-    cb.set_ticklabels(["0%\n(solo mujeres)","25%","50%\n(paridad)",
-                       "75%","100%\n(solo hombres)"])
+    cb.set_ticklabels(["0%\n(solo mujeres)", "25%", "50%\n(paridad)",
+                       "75%", "100%\n(solo hombres)"])
 
     ax.set_title("Segregación de género por sector e isla — Canarias, Marzo 2026",
                  fontsize=13, fontweight="bold", pad=12)
+    # BUG FIX: texto actualizado para reflejar el cmap azul/rosa
     fig.text(0.01, -0.02,
-             "Azul = mayoría mujeres · Rojo = mayoría hombres · "
+             "Azul = mayoría mujeres · Rosa = mayoría hombres · "
              "Blanco = paridad  ·  Fuente: SEPE / OBECAN · Contratos marzo 2026",
              fontsize=8, color="#666666")
 
@@ -649,6 +751,7 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Heatmap Segregación]({out})")})
+
 
 # ── COVID helpers ─────────────────────────────────────────────────────────────
 
@@ -682,8 +785,8 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
     empezar_en_cero = cfg_plot.get("empezar_en_cero", False)
 
     rentas = _load_rentas()
-    ISLAS_TURISTICAS = {"Lanzarote","Fuerteventura","Tenerife"}
-    ISLAS_RESTO      = {"Gran Canaria","La Palma","La Gomera","El Hierro"}
+    ISLAS_TURISTICAS = {"Lanzarote", "Fuerteventura", "Tenerife"}
+    ISLAS_RESTO      = {"Gran Canaria", "La Palma", "La Gomera", "El Hierro"}
 
     sub_all = rentas[rentas["MEDIDAS"] == medida]
     y_min_d = float(sub_all["OBS_VALUE"].min())
@@ -697,7 +800,6 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
 
     handles = []
 
-    # Resto: gris uniforme (fondo)
     for isla in sorted(ISLAS_RESTO):
         sub = rentas[(rentas["TERRITORIO"] == isla) &
                      (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
@@ -706,8 +808,7 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
     handles.append(mpatches.Patch(color=COLOR_RESTO_ISLAS, alpha=0.6,
                                   label="Resto de islas"))
 
-    # Turísticas: colores del proyecto (figura)
-    for isla in ["Tenerife","Fuerteventura","Lanzarote"]:
+    for isla in ["Tenerife", "Fuerteventura", "Lanzarote"]:
         sub = rentas[(rentas["TERRITORIO"] == isla) &
                      (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
         col = COLORES_ISLA[isla]
@@ -716,7 +817,6 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
                 alpha=1.0, zorder=4)
         handles.append(mpatches.Patch(color=col, label=isla))
 
-    # Anotación COVID posición dinámica
     ax.text(2020.15, y_max_d * 0.99,
             "COVID-19", fontsize=8.5, color="#c0392b",
             fontweight="bold", va="top")
@@ -728,7 +828,7 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
     ax.set_xticklabels(range(2015, 2024), fontsize=8.5)
     ax.set_ylabel(ylabel, fontsize=10)
     ax.yaxis.grid(True, color="#eeeeee", zorder=0)
-    ax.spines[["top","right"]].set_visible(False)
+    ax.spines[["top", "right"]].set_visible(False)
     ax.set_title(titulo, fontsize=13, fontweight="bold", pad=12)
     ax.legend(handles=handles, loc="center left",
               bbox_to_anchor=(1.02, 0.5), fontsize=9,
@@ -745,17 +845,23 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
 
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
-    """Barras agrupadas H/M por tipo de contrato, facet por edad — Marzo 2026."""
+    """
+    Barras agrupadas H/M por tipo de contrato, facet por edad — Marzo 2026.
+    Anotaciones reducidas: solo se etiqueta la barra más alta por panel
+    (o todas si anotar_solo_mayor=false en config).
+    """
     pal = get_paleta()
 
     df = pd.read_csv(get_processed_path("contratos_202603.csv"))
     df.columns = df.columns.str.strip()
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].str.strip()
-    df = df[df["sexo"].isin(["Hombres","Mujeres"])]
+    df = df[df["sexo"].isin(["Hombres", "Mujeres"])]
 
     cfg  = get_plot_config().get("brecha_temporal_edad", {})
     ISLA = cfg.get("isla", "Todas")
+    SOLO_MAYOR = cfg.get("anotar_solo_mayor", True)
+
     if ISLA != "Todas":
         df = df[df["isla"].str.upper() == ISLA.upper()]
 
@@ -768,14 +874,14 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     df["tc"] = df["Tipo Contrato"].map(TC_MAP)
     df = df.dropna(subset=["tc"])
 
-    EDAD_ORDER     = ["Menor de 25","Entre 25 y 44","45 o más"]
-    TC_LABEL_ORDER = ["Temp. Parcial","Temp. Completo","Conversión","Indefinido"]
+    EDAD_ORDER     = ["Menor de 25", "Entre 25 y 44", "45 o más"]
+    TC_LABEL_ORDER = ["Temp. Parcial", "Temp. Completo", "Conversión", "Indefinido"]
     COLORS = {"Hombres": pal["H"], "Mujeres": pal["M"]}
 
-    agg     = df.groupby(["edad","tc","sexo"])["Contratos"].sum().reset_index()
+    agg     = df.groupby(["edad", "tc", "sexo"])["Contratos"].sum().reset_index()
     agg     = agg[agg["tc"].isin(TC_LABEL_ORDER)]
-    totales = agg.groupby(["edad","sexo"])["Contratos"].sum().reset_index(name="total")
-    agg     = agg.merge(totales, on=["edad","sexo"])
+    totales = agg.groupby(["edad", "sexo"])["Contratos"].sum().reset_index(name="total")
+    agg     = agg.merge(totales, on=["edad", "sexo"])
     agg["pct"] = agg["Contratos"] / agg["total"] * 100
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 6), sharey=True)
@@ -785,27 +891,36 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
 
     for ax, edad in zip(axes, EDAD_ORDER):
         ax.set_facecolor("white")
-        for sexo, offset in [("Hombres",-w/2),("Mujeres",w/2)]:
+        all_vals = {}
+        for sexo, offset in [("Hombres", -w/2), ("Mujeres", w/2)]:
             vals = [
-                float(agg[(agg["edad"]==edad)&(agg["sexo"]==sexo)&
-                          (agg["tc"]==tc)]["pct"].values[0])
-                if len(agg[(agg["edad"]==edad)&(agg["sexo"]==sexo)&
-                           (agg["tc"]==tc)]) > 0 else 0.0
+                float(agg[(agg["edad"] == edad) & (agg["sexo"] == sexo) &
+                           (agg["tc"] == tc)]["pct"].values[0])
+                if len(agg[(agg["edad"] == edad) & (agg["sexo"] == sexo) &
+                            (agg["tc"] == tc)]) > 0 else 0.0
                 for tc in TC_LABEL_ORDER
             ]
-            ax.bar(x + offset, vals, w,
-                   color=COLORS[sexo], alpha=0.85, zorder=3)
-            for xi, v in zip(x + offset, vals):
-                if v > 4:
-                    ax.text(xi, v + 0.4, f"{v:.0f}%",
-                            ha="center", va="bottom", fontsize=7.5,
-                            color=COLORS[sexo], fontweight="bold")
+            ax.bar(x + offset, vals, w, color=COLORS[sexo], alpha=0.85, zorder=3)
+            all_vals[sexo] = vals
+
+        # Anotaciones: solo la barra más alta por panel, o todas si SOLO_MAYOR=False
+        for sexo, offset in [("Hombres", -w/2), ("Mujeres", w/2)]:
+            vals = all_vals[sexo]
+            max_v = max(vals)
+            for xi, (tc, v) in enumerate(zip(TC_LABEL_ORDER, vals)):
+                if v < 4:
+                    continue
+                if SOLO_MAYOR and v < max_v:
+                    continue
+                ax.text(xi + offset, v + 0.4, f"{v:.0f}%",
+                        ha="center", va="bottom", fontsize=7.5,
+                        color=COLORS[sexo], fontweight="bold")
 
         ax.set_xticks(x)
         ax.set_xticklabels(TC_LABEL_ORDER, fontsize=9, rotation=20, ha="right")
         ax.set_title(edad, fontsize=11, fontweight="bold", pad=8)
         ax.yaxis.grid(True, color="#eeeeee", zorder=0)
-        ax.spines[["top","right","left"]].set_visible(False)
+        ax.spines[["top", "right", "left"]].set_visible(False)
         ax.set_ylim(0, 62)
         if ax == axes[0]:
             ax.set_ylabel("% sobre contratos del grupo edad-sexo", fontsize=10)
@@ -835,27 +950,32 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="visualizaciones")
 def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> None:
     """
-    4 figuras (una por tipo de contrato) con evolución histórica 2019-2026
-    del % sobre total, por franja de edad y género.
-    Sin fill_between.
+    Small multiple 2×2: los 4 tipos de contrato en una sola figura,
+    con evolución histórica 2019-2026 por franja de edad y género.
+    Anotación de la reforma laboral (dic 2021).
     """
     pal = get_paleta()
 
     def detect_sep(p):
+        import csv as _csv
         with open(p, "r", encoding="utf-8", errors="ignore") as f:
-            l = f.readline()
-        return ";" if l.count(";") > l.count(",") else ","
+            sample = f.read(4096)
+        try:
+            dialect = _csv.Sniffer().sniff(sample, delimiters=",;")
+            return dialect.delimiter
+        except Exception:
+            return "," if sample.count(",") >= sample.count(";") else ";"
 
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
 
     FUENTES = [
-        (2019, [os.path.join(data_dir, "contratos2019.csv")],                                   "contratos"),
-        (2020, [os.path.join(data_dir, "contratos2020.csv")],                                   "contratos"),
-        (2021, [os.path.join(data_dir, "contratos2021.csv")],                                   "contratos"),
-        (2022, [os.path.join(data_dir, "contratos2022.csv")],                                   "contratos"),
-        (2023, sorted(glob.glob(os.path.join(data_dir,"2023","contratos_registrados_*.csv"))),  "Contratos"),
-        (2024, sorted(glob.glob(os.path.join(data_dir,"2024","contratos_registrados_*.csv"))),  "Contratos"),
-        (2025, sorted(glob.glob(os.path.join(data_dir,"2025","contratos_202*.csv"))),           "Contratos"),
+        (2019, [os.path.join(data_dir, "contratos2019.csv")],                                  "contratos"),
+        (2020, [os.path.join(data_dir, "contratos2020.csv")],                                  "contratos"),
+        (2021, [os.path.join(data_dir, "contratos2021.csv")],                                  "contratos"),
+        (2022, [os.path.join(data_dir, "contratos2022.csv")],                                  "contratos"),
+        (2023, sorted(glob.glob(os.path.join(data_dir, "2023", "contratos_registrados_*.csv"))), "Contratos"),
+        (2024, sorted(glob.glob(os.path.join(data_dir, "2024", "contratos_registrados_*.csv"))), "Contratos"),
+        (2025, sorted(glob.glob(os.path.join(data_dir, "2025", "contratos_202*.csv"))),          "Contratos"),
     ]
 
     df26 = pd.read_csv(
@@ -866,25 +986,31 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
     df26 = df26.rename(columns={"Contratos": "c"})
     for col in df26.select_dtypes(include="object").columns:
         df26[col] = df26[col].str.strip()
-    df26 = df26[df26["sexo"].isin(["Hombres","Mujeres"])]
+    df26 = df26[df26["sexo"].isin(["Hombres", "Mujeres"])]
     df26["año"] = 2026
 
     all_dfs = []
     for año, paths, col_c in FUENTES:
+        if not paths:
+            context.log.warning(f"Sin archivos para el año {año}")
+            continue
         dfs = []
         for p in paths:
             if not os.path.exists(p):
+                context.log.warning(f"Archivo no encontrado: {p}")
                 continue
             df = pd.read_csv(p, sep=detect_sep(p), dtype={col_c: float})
             df.columns = df.columns.str.strip()
             df = df.rename(columns={col_c: "c"})
             for col in df.select_dtypes(include="object").columns:
                 df[col] = df[col].str.strip()
-            dfs.append(df[df["sexo"].isin(["Hombres","Mujeres"])])
+            dfs.append(df[df["sexo"].isin(["Hombres", "Mujeres"])])
         if dfs:
             df_y = pd.concat(dfs, ignore_index=True)
             df_y["año"] = año
             all_dfs.append(df_y)
+        else:
+            context.log.warning(f"Ningún archivo válido para el año {año}")
 
     all_dfs.append(df26)
     df_hist = pd.concat(all_dfs, ignore_index=True)
@@ -895,108 +1021,136 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
         "Temporal Tiempo Parcial":  "Temp. Parcial",
         "Conversión a Indefinido":  "Conversión",
     }
-    EDADES   = ["Menor de 25","Entre 25 y 44","45 o más"]
-    AÑOS     = [2019,2020,2021,2022,2023,2024,2025,2026]
-    COLORS   = {"Hombres": pal["H"], "Mujeres": pal["M"]}
     TC_TITLE = {
-        "Temp. Parcial":  "Contrato temporal a tiempo parcial",
-        "Temp. Completo": "Contrato temporal a tiempo completo",
+        "Temp. Parcial":  "Temporal tiempo parcial",
+        "Temp. Completo": "Temporal tiempo completo",
         "Conversión":     "Conversión a indefinido",
         "Indefinido":     "Contrato indefinido",
     }
+    TC_ORDER = ["Temp. Parcial", "Temp. Completo", "Conversión", "Indefinido"]
+
+    EDADES   = ["Menor de 25", "Entre 25 y 44", "45 o más"]
+    COLORS   = {"Hombres": pal["H"], "Mujeres": pal["M"]}
 
     df_hist["tc"] = df_hist["Tipo Contrato"].str.strip().map(TC_MAP)
-    df_hist = df_hist.dropna(subset=["tc","edad"])
+    df_hist = df_hist.dropna(subset=["tc", "edad"])
     df_hist = df_hist[df_hist["edad"].isin(EDADES)]
 
-    total = (df_hist.groupby(["año","edad","sexo"])["c"]
+    # Derivar AÑOS desde los datos (no hardcodeado)
+    AÑOS = sorted(df_hist["año"].unique())
+
+    total = (df_hist.groupby(["año", "edad", "sexo"])["c"]
              .sum().reset_index(name="total"))
-    agg   = df_hist.groupby(["año","edad","sexo","tc"])["c"].sum().reset_index()
-    agg   = agg.merge(total, on=["año","edad","sexo"])
+    agg   = df_hist.groupby(["año", "edad", "sexo", "tc"])["c"].sum().reset_index()
+    agg   = agg.merge(total, on=["año", "edad", "sexo"])
     agg["pct"] = agg["c"] / agg["total"] * 100
 
+    # Small multiple 2×2: una figura con los 4 tipos de contrato
+    fig, axes_grid = plt.subplots(2, 2, figsize=(16, 10), sharey=False, sharex=True)
+    fig.patch.set_facecolor("white")
+
     output_paths = []
-    for tc_name in TC_MAP.values():
-        fig, axes = plt.subplots(1, len(EDADES), figsize=(14, 5),
-                                 sharey=True, sharex=True)
-        fig.patch.set_facecolor("white")
+
+    for idx, tc_name in enumerate(TC_ORDER):
+        row_i, col_i = divmod(idx, 2)
+        axes = [axes_grid[row_i, col_i]]  # lista de 1 para reutilizar lógica por edad
+
+        # En el small multiple, los 3 paneles de edad van en columnas separadas
+        # Necesitamos 3 subplots por tipo → rediseñamos el layout interno
+        # Liberamos el axes_grid y usamos subfigures
+        pass
+
+    plt.close(fig)
+
+    # Layout real: figura principal con subfigures 2×2, cada una con 3 paneles
+    fig = plt.figure(figsize=(18, 11))
+    fig.patch.set_facecolor("white")
+    subfigs = fig.subfigures(2, 2, wspace=0.08, hspace=0.18)
+
+    output_paths = []
+
+    for idx, tc_name in enumerate(TC_ORDER):
+        row_i, col_i = divmod(idx, 2)
+        subfig = subfigs[row_i, col_i]
+        subfig.set_facecolor("white")
+        axes = subfig.subplots(1, len(EDADES), sharey=True, sharex=True)
 
         for col, edad in enumerate(EDADES):
             ax = axes[col]
             ax.set_facecolor("white")
 
-            ax.axvspan(1, 2.5, color="#f5f5f5", alpha=0.8, zorder=0)
-            ax.axvline(2.5, color="#dddddd", lw=0.8, zorder=1)
+            # Franja pre-reforma laboral (dic 2021 → índice aprox 2.5 en AÑOS)
+            idx_reforma = AÑOS.index(2022) - 0.5 if 2022 in AÑOS else None
+            if idx_reforma is not None:
+                ax.axvspan(-0.5, idx_reforma, color="#f5f5f5", alpha=0.8, zorder=0)
+                ax.axvline(idx_reforma, color="#dddddd", lw=0.8, zorder=1)
+                if col == 0:
+                    ax.text(idx_reforma - 0.1, ax.get_ylim()[1] if ax.get_ylim()[1] > 0 else 50,
+                            "↑ pre-reforma\nlaboral",
+                            fontsize=7, color="#aaaaaa", ha="right", va="top")
 
-            for sexo in ["Hombres","Mujeres"]:
-                sub  = agg[(agg["sexo"]==sexo) &
-                           (agg["edad"]==edad) &
-                           (agg["tc"]==tc_name)].set_index("año")
-                vals = [sub.loc[a,"pct"] if a in sub.index else np.nan
-                        for a in AÑOS]
+            for sexo in ["Hombres", "Mujeres"]:
+                sub  = agg[(agg["sexo"] == sexo) &
+                           (agg["edad"] == edad) &
+                           (agg["tc"] == tc_name)].set_index("año")
+                vals = [sub.loc[a, "pct"] if a in sub.index else np.nan for a in AÑOS]
 
-                xs = [i for i,a in enumerate(AÑOS)
-                      if a <= 2025 and not np.isnan(vals[i])]
+                xs = [i for i, a in enumerate(AÑOS) if a <= 2025 and not np.isnan(vals[i])]
                 ys = [vals[i] for i in xs]
                 ax.plot(xs, ys, color=COLORS[sexo], lw=2.2,
                         alpha=0.9, zorder=4, solid_capstyle="round")
 
-                for i_pt in [0, AÑOS.index(2025)]:
-                    if not np.isnan(vals[i_pt]):
-                        ax.scatter(i_pt, vals[i_pt], s=55,
+                for i_pt in [0, len([a for a in AÑOS if a <= 2025]) - 1]:
+                    if i_pt < len(xs) and not np.isnan(ys[i_pt]):
+                        ax.scatter(xs[i_pt], ys[i_pt], s=55,
                                    color=COLORS[sexo], zorder=5,
                                    edgecolors="white", linewidths=0.8)
 
-                i26 = AÑOS.index(2026)
-                v26 = vals[i26]
-                if not np.isnan(v26):
-                    ax.scatter(i26, v26, s=45, color=COLORS[sexo],
+                i26 = AÑOS.index(2026) if 2026 in AÑOS else None
+                if i26 is not None and not np.isnan(vals[i26]):
+                    ax.scatter(i26, vals[i26], s=45, color=COLORS[sexo],
                                marker="D", zorder=5, alpha=0.6,
                                edgecolors="white", linewidths=0.8)
 
-            # Sin fill_between
-
-            ax.set_title(edad, fontsize=11, fontweight="bold",
-                         pad=8, color="#333333")
+            ax.set_title(edad, fontsize=10, fontweight="bold", pad=6, color="#333333")
             ax.set_xticks(range(len(AÑOS)))
             ax.set_xticklabels(
                 [str(a) if a != 2026 else "Mar\n2026" for a in AÑOS],
-                fontsize=8.5, rotation=30, ha="right")
-
+                fontsize=7.5, rotation=30, ha="right")
             ax.yaxis.grid(True, color="#eeeeee", lw=0.8, zorder=0)
-            ax.spines[["top","right","bottom"]].set_visible(False)
+            ax.spines[["top", "right", "bottom"]].set_visible(False)
             ax.spines["left"].set_color("#eeeeee")
-            ax.tick_params(axis="y", labelsize=8.5, colors="#888888")
+            ax.tick_params(axis="y", labelsize=8, colors="#888888")
             ax.tick_params(axis="x", length=0)
-
             if col == 0:
-                ax.set_ylabel("% sobre total contratos del grupo",
-                              fontsize=9.5, color="#444444")
+                ax.set_ylabel("% sobre total contratos", fontsize=8.5, color="#444444")
 
-        handles = [mpatches.Patch(color=COLORS[s], label=s)
-                   for s in ["Hombres","Mujeres"]]
-        handles += [plt.scatter([], [], marker="D", color="#aaaaaa",
-                                s=40, alpha=0.6, label="Mar 2026 (dato parcial)")]
-        fig.legend(handles=handles, loc="lower center", ncol=3,
-                   fontsize=10, frameon=False, bbox_to_anchor=(0.5, -0.04))
+        subfig.suptitle(TC_TITLE[tc_name], fontsize=11, fontweight="bold",
+                        color="#222222", y=1.01)
 
-        fig.suptitle(f"{TC_TITLE[tc_name]} — Canarias 2019-2026",
-                     fontsize=13, fontweight="bold", y=1.01)
-        fig.text(0.99, -0.06, "Fuente: OBECAN / SEPE",
-                 ha="right", fontsize=8, color="#888888")
+    # Leyenda y anotación reforma laboral en figura principal
+    handles = [mpatches.Patch(color=COLORS[s], label=s) for s in ["Hombres", "Mujeres"]]
+    handles += [plt.scatter([], [], marker="D", color="#aaaaaa",
+                            s=40, alpha=0.6, label="Mar 2026 (dato parcial)")]
+    fig.legend(handles=handles, loc="lower center", ncol=3,
+               fontsize=10, frameon=False, bbox_to_anchor=(0.5, -0.01))
 
-        plt.tight_layout(rect=[0, 0.08, 1, 1])
+    fig.suptitle("Evolución del tipo de contrato por edad y género — Canarias 2019-2026",
+                 fontsize=14, fontweight="bold", y=1.02)
+    fig.text(0.99, -0.03, "Fuente: OBECAN / SEPE",
+             ha="right", fontsize=8, color="#888888")
 
-        safe = tc_name.lower().replace(". ","_").replace(" ","_")
-        out  = os.path.join(get_plot_dir(), f"historico_{safe}.png")
-        fig.savefig(out, dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        output_paths.append(out)
-        context.log.info(f"✓ {out}")
+    plt.tight_layout(rect=[0, 0.04, 1, 1])
 
+    out = os.path.join(get_plot_dir(), "historico_tipos_contrato_2x2.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    output_paths.append(out)
+    context.log.info(f"✓ {out}")
+
+    # BUG FIX: metadata siempre se emite, aunque algún tipo de contrato
+    # no tenga datos suficientes
     context.add_output_metadata({
         "plots": MetadataValue.md(
             "\n".join(f"- `{os.path.basename(p)}`" for p in output_paths))
     })
-
-

@@ -3,23 +3,14 @@
 # ══════════════════════════════════════════════════════════════════════════════
 
 # ── Paleta global ─────────────────────────────────────────────────────────────
-# USO 1 — Identidad de género (barras apiladas, líneas, histogramas):
-#   color_hombres / color_mujeres identifican la serie.
-#
-# USO 2 — Dirección de la brecha (mapa coroplético, slope chart):
-#   color_brecha_favorable_hombres / color_brecha_favorable_mujeres.
-#   Por defecto igual que Uso 1. Cambiar aquí afecta a todo el proyecto.
-#
-# USO 3 — Tipos de contrato (fijo en el código, no configurable aquí):
-#   Temp. Parcial #e63946 · Temp. Completo #f4a261
-#   Conversión #a8dadc · Indefinido #2a9d8f
-
 paleta:
   color_hombres: "#4A90D9"
   color_mujeres: "#D94A8C"
   color_brecha_favorable_hombres: "#4A90D9"
   color_brecha_favorable_mujeres: "#D94A8C"
-  cmap_brecha: "RdBu_r"   # opciones: "RdBu_r", "PiYG", "PRGn", "BrBG"
+  # cmap_brecha: si se omite, se usa el cmap azul→blanco→rosa generado en código.
+  # Descomenta para forzar uno de matplotlib:
+  # cmap_brecha: "RdBu_r"
 
 # ── Assets existentes ─────────────────────────────────────────────────────────
 
@@ -33,14 +24,22 @@ mapa_distribucion:
   componente: "SUELDOS_SALARIOS"
   # Opciones: OTRAS_PRESTACIONES, OTROS_INGRESOS, PENSIONES,
   #           PRESTACIONES_DESEMPLEO, SUELDOS_SALARIOS
+  # cmap único para todos los componentes (sobreescribe los cmaps individuales):
+  # cmap_unico: "YlOrRd"
 
 actividad_barras:
   dataset: "actividad-sc-3.csv"
   isla: "Tenerife"
   # Opciones: "Tenerife", "La Palma", "La Gomera", "El Hierro", "Todas"
+  # modo: "stack"  → barras apiladas (volumen total + composición)
+  #        "fill"  → 100% apilado (solo proporción H/M)
+  #        "dodge" → barras agrupadas (comparar valores absolutos H vs M)
+  modo: "fill"
 
 ocupacion_divergente:
   dataset: "ocupacion-sc-3.csv"
+  # ano: si se especifica, filtra ese año; si se omite, agrega todos los años
+  # ano: 2023
 
 brecha_salarial:
   dataset_ocu: "ocupacion-sc-3.csv"
@@ -50,11 +49,15 @@ brecha_salarial:
   ano_fin: 2023
   ano_mapa: 2023
   umbral: 0.02
+  # n_anotaciones_mapa: municipios extremos a etiquetar directamente en el mapa
+  n_anotaciones_mapa: 3
 
 brecha_temporal_edad:
   isla: "Tenerife"
   # Opciones: "Todas", "Tenerife", "Gran Canaria", "Lanzarote",
   #           "Fuerteventura", "La Palma", "La Gomera", "El Hierro"
+  # anotar_solo_mayor: true → solo etiqueta la barra más alta por panel
+  anotar_solo_mayor: true
 
 # ── Control eje Y: true = desde 0 / false = truncado con símbolo // ──────────
 
@@ -66,10 +69,10 @@ covid_prestaciones_islas:
 
 gini_evolucion_islas:
   empezar_en_cero: true
+  # top_n_islas: si se omite, se calcula dinámicamente desde el último año
+  # top_n_islas: 3
 
 # ── Assets contratos históricos (toda Canarias) ───────────────────────────────
-# ambito: "Canarias" | "SC Tenerife" | "Las Palmas" | nombre de isla
-# ano: 2019-2025 o 2026 (solo marzo)
 
 actividad_barras_canarias:
   ano: 2025
@@ -80,7 +83,7 @@ ocupacion_divergente_canarias:
   ano: 2025
   ambito: "Canarias"
   min_contratos: 100
-  agregar_islas: true   # true = gráfico único agregado sin facet
+  agregar_islas: true
 
 mapa_feminizacion_municipios:
-  ambito: "Canarias"   # opciones: "Canarias", "SC Tenerife", "Las Palmas", o isla
+  ambito: "Canarias"
