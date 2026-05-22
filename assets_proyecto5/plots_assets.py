@@ -273,19 +273,17 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
 
     p = (
         ggplot(pivot, aes(x="reorder(ocupacion_wrap, brecha)",
-                          y="brecha", color="direccion"))
-        + geom_hline(yintercept=0, color="#cccccc", size=0.6)
-        + geom_segment(aes(xend="reorder(ocupacion_wrap, brecha)", y=0, yend="brecha"),
-                       size=1.2, alpha=0.7)
-        + geom_point(size=3.5)
-        + scale_color_manual(values={"Mayoría Hombres": pal["BH"],
-                                     "Mayoría Mujeres": pal["BM"]})
+                          y="brecha", fill="direccion"))
+        + geom_col(width=0.65, alpha=0.9)
+        + geom_hline(yintercept=0, linetype="dashed", color="#333333", size=0.4)
+        + scale_fill_manual(values={"Mayoría Hombres": pal["BH"],
+                                    "Mayoría Mujeres": pal["BM"]})
         + scale_y_continuous(labels=fmt_k)
         + coord_flip()
         + labs(
             title=f"Brecha de género por ocupación — Tenerife{ano_label}",
             subtitle="Diferencia acumulada (Hombres − Mujeres)",
-            x=None, y=None, color=None,
+            x=None, y=None, fill=None,
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
@@ -346,16 +344,10 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     }
 
     p = (
-        ggplot(top, aes(x="reorder(municipio, delta)", y="delta", color="direccion"))
-        + geom_hline(yintercept=0, color="#cccccc", size=0.6)
-        + geom_segment(aes(xend="reorder(municipio, delta)", y=0, yend="delta"),
-                       size=1.4, alpha=0.7)
-        + geom_point(size=4.5)
-        + geom_text(aes(label="municipio"),
-                    ha="left",
-                    nudge_y=top["delta"].abs().max() * 0.08,
-                    size=8, color="#444444")
-        + scale_color_manual(values=COLORES, name=None)
+        ggplot(top, aes(x="reorder(municipio, delta)", y="delta", fill="direccion"))
+        + geom_col(width=0.65, alpha=0.9)
+        + geom_hline(yintercept=0, linetype="dashed", color="#333333", size=0.4)
+        + scale_fill_manual(values=COLORES, name=None)
         + coord_flip()
         + labs(
             title="Municipios con mayor cambio en brecha salarial de género",
@@ -372,7 +364,6 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             plot_subtitle=element_text(size=10, color="#555555"),
             panel_grid_major_y=element_blank(),
             panel_grid_minor=element_blank(),
-            axis_text_y=element_blank(),   # etiquetas en geom_text, no en eje
             legend_position="bottom",
         )
     )
@@ -430,9 +421,9 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
     cbar.set_label("Índice de brecha salarial", fontsize=10)
     cbar.ax.text(0.5, -0.02, "mujeres", transform=cbar.ax.transAxes,
-                 ha="center", va="top", fontsize=8, color="#4A90D9")
+                 ha="center", va="top", fontsize=8, color="#4A90D9")   # azul
     cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
-                 ha="center", va="bottom", fontsize=8, color="#D94A8C")
+                 ha="center", va="bottom", fontsize=8, color="#D94A8C")  # rosa
 
     fig.suptitle(f"Brecha salarial de género por municipio — Tenerife {AÑO_MAPA}",
                  fontsize=15, fontweight="bold", y=0.95)
@@ -512,28 +503,20 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
                 alpha=1.0 if is_top else 0.5,
                 zorder=4 if is_top else 2)
 
-        if is_top:
-            # Solo etiqueta de isla al final de la línea, sin valor numérico
-            ultimo = sub[sub["TIME_PERIOD"] == sub["TIME_PERIOD"].max()]
-            ax.text(ultimo["TIME_PERIOD"].values[0] + 0.15,
-                    float(ultimo["OBS_VALUE"].values[0]),
-                    isla,
-                    fontsize=8.5, color=col,
-                    fontweight="bold", va="center")
+        # sin etiqueta inline — el dato va en la leyenda lateral
 
     _aplicar_eje_y(ax,
                    y_min_data=float(df["OBS_VALUE"].min()),
                    y_max_data=float(df["OBS_VALUE"].max() + 5),
                    empezar_en_cero=empezar_en_cero)
 
-    ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 1.8)
+    ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 0.5)
     ax.set_xticks(AÑOS)
     ax.set_xticklabels(AÑOS, fontsize=9)
     ax.set_ylabel("Índice de Gini", fontsize=10)
     ax.yaxis.grid(True, color="#eeeeee", zorder=0)
     ax.spines[["top", "right"]].set_visible(False)
 
-    # Leyenda con valor numérico del último año incorporado a la etiqueta
     handles = [
         mpatches.Patch(
             color=COLORES_ISLA.get(i, "#aaaaaa"),
@@ -543,7 +526,9 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
     ]
     handles += [mpatches.Patch(color=COLOR_RESTO_ISLAS, alpha=0.6,
                                label="Resto de islas")]
-    ax.legend(handles=handles, loc="lower left", fontsize=9, frameon=False)
+    ax.legend(handles=handles, loc="center left",
+              bbox_to_anchor=(1.02, 0.5), fontsize=9,
+              frameon=False, title="Islas")
 
     ax.set_title("Evolución del Índice de Gini por isla — Canarias 2015-2023",
                  fontsize=13, fontweight="bold", pad=12)
@@ -630,9 +615,8 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     fig.patch.set_facecolor("white")
 
     norm_c = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
-    cmap_c = LinearSegmentedColormap.from_list(
-        "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
-    )
+    # BUG FIX: usar directamente el objeto cmap, no plt.get_cmap()
+    cmap_c = pal["cmap_brecha"]
     ax.imshow(heat.values, cmap=cmap_c, norm=norm_c, aspect="auto")
 
     ax.set_xticks(range(len(ISLAS_ORD)))
@@ -727,6 +711,7 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
     handles.append(mpatches.Patch(color=COLOR_RESTO_ISLAS, alpha=0.6,
                                   label="Resto de islas"))
 
+
     for isla in ["Tenerife", "Fuerteventura", "Lanzarote"]:
         sub = rentas[(rentas["TERRITORIO"] == isla) &
                      (rentas["MEDIDAS"] == medida)].sort_values("TIME_PERIOD")
@@ -734,7 +719,9 @@ def _plot_covid_lineas(context, medida: str, ylabel: str,
         ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
                 color=col, lw=3.0, marker="o", markersize=6,
                 alpha=1.0, zorder=4)
-        handles.append(mpatches.Patch(color=col, label=isla))
+        val_ultimo = float(sub["OBS_VALUE"].iloc[-1]) if not sub.empty else 0
+        handles.append(mpatches.Patch(color=col,
+                                      label=f"{isla}  ({val_ultimo:.1f})"))
 
     ax.text(2020.15, y_max_d * 0.99,
             "COVID-19", fontsize=8.5, color="#c0392b",
@@ -967,23 +954,13 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
     output_paths = []
 
     for tc_name in TC_MAP.values():
-        fig, axes = plt.subplots(1, len(EDADES), figsize=(14, 5),
+        fig, axes = plt.subplots(1, len(EDADES), figsize=(14, 6),
                                  sharey=True, sharex=True)
         fig.patch.set_facecolor("white")
 
         for col, edad in enumerate(EDADES):
             ax = axes[col]
             ax.set_facecolor("white")
-
-            # Franja pre-reforma laboral
-            idx_reforma = AÑOS.index(2022) - 0.5 if 2022 in AÑOS else None
-            if idx_reforma is not None:
-                ax.axvspan(-0.5, idx_reforma, color="#f5f5f5", alpha=0.8, zorder=0)
-                ax.axvline(idx_reforma, color="#dddddd", lw=0.8, zorder=1)
-                if col == 0:
-                    ax.text(idx_reforma - 0.1, 50,
-                            "↑ pre-reforma\nlaboral",
-                            fontsize=7, color="#aaaaaa", ha="right", va="top")
 
             for sexo in ["Hombres", "Mujeres"]:
                 sub  = agg[(agg["sexo"] == sexo) &
