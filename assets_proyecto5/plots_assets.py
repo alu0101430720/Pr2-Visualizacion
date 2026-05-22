@@ -604,7 +604,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
             ax.axhspan(i - 0.45, i + 0.45, color="#f7f7f7", zorder=0)
 
     # Línea de paridad (figura principal)
-    ax.axvline(0.8, color="#bbbbbb", lw=1.5, ls="--", zorder=1)
+    ax.axvline(0.5, color="#bbbbbb", lw=1.8, ls="--", zorder=1)
     ax.text(0.5, -0.7, "paridad", ha="center", va="top",
             fontsize=7.5, color="#aaaaaa", style="italic")
 
