@@ -14,9 +14,7 @@ import matplotlib.patches as mpatches
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import LinearSegmentedColormap
 from plotnine import *
-from dagster import (
-    asset, AssetExecutionContext, MetadataValue,
-)
+from dagster import asset, AssetExecutionContext, MetadataValue
 from assets import preprocesar_datos_p5
 import config
 
@@ -229,7 +227,7 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
             title=f"Actividad económica por año y sexo — "
                   f"{ISLA if ISLA != 'Todas' else 'Toda la provincia'}",
             subtitle=subtitle,
-            x="", y=y_label, fill="Sexo",
+            x=None, y=y_label, fill="Sexo",
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
@@ -246,6 +244,61 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
     out = os.path.join(get_plot_dir(), "actividad_barras.png")
     p.save(out, width=14, height=8, dpi=150, verbose=False)
     context.add_output_metadata({"plot": MetadataValue.md(f"![Actividad Barras]({out})")})
+
+
+@asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
+def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
+    cfg = get_plot_config()["ocupacion_divergente"]
+    pal = get_paleta()
+
+    df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["num_casos"])
+    df = df[df["sexo"].isin(["Hombres", "Mujeres"]) & (df["ocupacion"] != "No consta")]
+
+    # Filtro opcional por año
+    ano = cfg.get("ano", None)
+    ano_label = ""
+    if ano is not None:
+        df = df[df["año"] == ano]
+        ano_label = f" — {ano}"
+
+    agg   = df.groupby(["ocupacion", "sexo"], as_index=False)["num_casos"].sum()
+    pivot = agg.pivot(index="ocupacion", columns="sexo", values="num_casos").reset_index()
+    pivot["brecha"]    = pivot["Hombres"] - pivot["Mujeres"]
+    pivot["direccion"] = pivot["brecha"].apply(
+        lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
+
+    # textwrap en lugar de corte fijo para no partir palabras
+    pivot["ocupacion_wrap"] = pivot["ocupacion"].apply(
+        lambda s: "\n".join(textwrap.wrap(s, 40)))
+
+    p = (
+        ggplot(pivot, aes(x="reorder(ocupacion_wrap, brecha)",
+                          y="brecha", fill="direccion"))
+        + geom_col(width=0.65, alpha=0.9)
+        + geom_hline(yintercept=0, linetype="dashed", color="#333333", size=0.4)
+        + scale_fill_manual(values={"Mayoría Hombres": pal["BH"],
+                                    "Mayoría Mujeres": pal["BM"]})
+        + scale_y_continuous(labels=fmt_k)
+        + coord_flip()
+        + labs(
+            title=f"Brecha de género por ocupación — Tenerife{ano_label}",
+            subtitle="Diferencia acumulada (Hombres − Mujeres)",
+            x=None, y=None, fill=None,
+            caption="Fuente: ISTAC",
+        )
+        + theme_minimal()
+        + theme(
+            figure_size=(12, 6),
+            plot_title=element_text(size=13, face="bold"),
+            plot_subtitle=element_text(size=10, color="#555555"),
+            panel_grid_major_y=element_blank(),
+            panel_grid_major_x=element_line(color="#dddddd", size=0.4),
+            legend_position="bottom",
+        )
+    )
+    out = os.path.join(get_plot_dir(), "ocupacion_divergente.png")
+    p.save(out, width=12, height=6, dpi=150, verbose=False)
+    context.add_output_metadata({"plot": MetadataValue.md(f"![Ocupacion Divergente]({out})")})
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
@@ -301,7 +354,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             subtitle=(f"Δ índice entre {AÑO_INI} y {AÑO_FIN} · "
                       f"Top {TOP_N} por variación absoluta · "
                       f"+ = brecha aumenta  /  − = brecha disminuye"),
-            x="", y="Cambio en índice de brecha salarial",
+            x=None, y="Cambio en índice de brecha salarial",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
         + theme_minimal()
@@ -368,9 +421,9 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
     cbar.set_label("Índice de brecha salarial", fontsize=10)
     cbar.ax.text(0.5, -0.02, "mujeres", transform=cbar.ax.transAxes,
-                 ha="center", va="top", fontsize=8, color="#D94A8C")   # rosa
+                 ha="center", va="top", fontsize=8, color="#4A90D9")   # azul
     cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
-                 ha="center", va="bottom", fontsize=8, color="#4A90D9")  # azul
+                 ha="center", va="bottom", fontsize=8, color="#D94A8C")  # rosa
 
     fig.suptitle(f"Brecha salarial de género por municipio — Tenerife {AÑO_MAPA}",
                  fontsize=15, fontweight="bold", y=0.95)
@@ -562,10 +615,20 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     fig.patch.set_facecolor("white")
 
     norm_c = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
-    cmap_c = LinearSegmentedColormap.from_list(
-        "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
-    )
-    ax.imshow(heat.values, cmap=cmap_c, norm=norm_c, aspect="auto")
+    # BUG FIX: usar directamente el objeto cmap, no plt.get_cmap()
+    cmap_c = pal["cmap_brecha"]
+
+    # Celdas sin datos: fondo gris neutro ANTES del imshow principal.
+    # Blanco = paridad en el gradiente, así que dejar NaN en blanco
+    # sería perceptivamente idéntico a "50% hombres" — error Gestalt grave.
+    mask_nan = np.isnan(heat.values)
+    if mask_nan.any():
+        nan_cmap = mcolors.ListedColormap(["#cccccc"])
+        ax.imshow(np.where(mask_nan, 0, np.nan),
+                  cmap=nan_cmap, aspect="auto",
+                  vmin=0, vmax=1, zorder=1)
+
+    ax.imshow(heat.values, cmap=cmap_c, norm=norm_c, aspect="auto", zorder=2)
 
     ax.set_xticks(range(len(ISLAS_ORD)))
     ax.set_xticklabels(ISLAS_LBL, fontsize=10, fontweight="bold")
@@ -590,6 +653,13 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
 
     ax.set_title("Segregación de género por sector e isla — Canarias, Marzo 2026",
                  fontsize=13, fontweight="bold", pad=12)
+    # BUG FIX: texto actualizado para reflejar el cmap azul/rosa
+    # La entrada "Sin datos" se añade solo si hay NaN en el heatmap
+    pie = "Azul = mayoría mujeres · Rosa = mayoría hombres · Blanco = paridad"
+    if mask_nan.any():
+        pie += "  ·  ▪ Gris = sin datos"
+    pie += "  ·  Fuente: SEPE / OBECAN · Contratos marzo 2026"
+    fig.text(0.01, -0.02, pie, fontsize=8, color="#666666")
 
     plt.tight_layout()
     out = os.path.join(get_plot_dir(), "heatmap_segregacion_sectorial.png")
@@ -1098,7 +1168,6 @@ def _cargar_contratos(data_dir: str, año: int) -> pd.DataFrame | None:
         df = df.rename(columns={col_c: "c"})
         for col in df.select_dtypes(include="object").columns:
             df[col] = df[col].str.strip()
-        # Corregir artículos antes de inferir isla
         if "Municipio" in df.columns:
             df["Municipio"] = df["Municipio"].apply(_fix_articulo)
         dfs.append(df[df["sexo"].isin(["Hombres", "Mujeres"])])
@@ -1106,13 +1175,11 @@ def _cargar_contratos(data_dir: str, año: int) -> pd.DataFrame | None:
     df_año = pd.concat(dfs, ignore_index=True)
     df_año["año"] = año
 
-    # Inferir isla si no existe (ficheros 2019-2022)
     if "isla" not in df_año.columns:
         df_año["isla"] = df_año["Municipio"].apply(inferir_isla)
     else:
         df_año["isla"] = df_año["isla"].str.strip().str.title()
 
-    # Grupo CNO-1
     if "CNO11" in df_año.columns:
         df_año["grupo_cno"] = (
             df_año["CNO11"].apply(_cno_grupo).map(CNO_GRUPOS)
@@ -1133,7 +1200,7 @@ def _tema_base(fig_size):
     )
 
 
-# ── Assets ────────────────────────────────────────────────────────────────────
+# ── Asset ─────────────────────────────────────────────────────────────────────
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
@@ -1141,10 +1208,10 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
     Barras divergentes H-M por grupo CNO-1, filtradas según el ámbito
     configurado en plot_config.yaml.
     """
-    cfg    = get_plot_config()["ocupacion_divergente_canarias"]
-    AÑO    = cfg.get("ano", 2025)
-    AMBITO = cfg.get("ambito", "Canarias")
-    MIN_C  = cfg.get("min_contratos", 100)
+    cfg     = get_plot_config()["ocupacion_divergente_canarias"]
+    AÑO     = cfg.get("ano", 2025)
+    AMBITO  = cfg.get("ambito", "Canarias")
+    MIN_C   = cfg.get("min_contratos", 100)
     AGREGAR = cfg.get("agregar_islas", False)
 
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
@@ -1165,20 +1232,19 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
 
     es_isla_unica = AMBITO in ISLAS_VALIDAS
 
-    # ── Modo agregado: toda Canarias en un único gráfico sin facet ────────────
     if AGREGAR or es_isla_unica:
         pivot = (
-            df.groupby(["grupo_cno","sexo"])["c"]
+            df.groupby(["grupo_cno", "sexo"])["c"]
             .sum().unstack("sexo").fillna(0).reset_index()
         )
         pivot.columns.name = None
-        total_can          = df["c"].sum()
-        pivot["brecha"]    = (
-            (pivot.get("Hombres",0) - pivot.get("Mujeres",0))
+        total_can       = df["c"].sum()
+        pivot["brecha"] = (
+            (pivot.get("Hombres", 0) - pivot.get("Mujeres", 0))
             / total_can * 100
         )
-        pivot["total"]     = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
-        pivot              = pivot[pivot["total"] >= MIN_C]
+        pivot["total"]  = pivot.get("Hombres", 0) + pivot.get("Mujeres", 0)
+        pivot           = pivot[pivot["total"] >= MIN_C]
         pivot["direccion"] = pivot["brecha"].apply(
             lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
 
@@ -1196,12 +1262,11 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + geom_hline(yintercept=0, linetype="dashed",
                          color="#333333", size=0.5)
             + scale_fill_manual(
-                values={"Mayoría Hombres":"#4A90D9",
-                        "Mayoría Mujeres":"#D94A8C"}, name=None)
+                values={"Mayoría Hombres": "#4A90D9",
+                        "Mayoría Mujeres": "#D94A8C"}, name=None)
             + scale_y_continuous(labels=lambda l: [f"{v:+.1f}%" for v in l])
             + coord_flip()
-            + labs(title=titulo,
-                   subtitle=subtitulo,
+            + labs(title=titulo, subtitle=subtitulo,
                    x="", y="% sobre total contratos (Hombres − Mujeres)",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((11, 6))
@@ -1209,27 +1274,24 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
         fig_w, fig_h = 11, 6
 
     else:
-        # ── Modo facet: una columna por isla ──────────────────────────────────
         islas_ambito = _islas_en_ambito(AMBITO)
-        # Total por isla para normalizar
-        total_isla = df[df["isla"].isin(ISLAS_VALIDAS)].groupby("isla")["c"].sum()
+        total_isla   = df[df["isla"].isin(ISLAS_VALIDAS)].groupby("isla")["c"].sum()
 
         pivot = (
-            df.groupby(["isla","grupo_cno","sexo"])["c"]
+            df.groupby(["isla", "grupo_cno", "sexo"])["c"]
             .sum().unstack("sexo").fillna(0).reset_index()
         )
-        pivot.columns.name = None
+        pivot.columns.name  = None
         pivot["total_isla"] = pivot["isla"].map(total_isla)
         pivot["brecha"]     = (
-            (pivot.get("Hombres",0) - pivot.get("Mujeres",0))
+            (pivot.get("Hombres", 0) - pivot.get("Mujeres", 0))
             / pivot["total_isla"] * 100
         )
-        pivot["total"]      = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
+        pivot["total"]      = pivot.get("Hombres", 0) + pivot.get("Mujeres", 0)
         pivot               = pivot[pivot["total"] >= MIN_C]
         pivot["direccion"]  = pivot["brecha"].apply(
             lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
 
-        # Orden global: coherencia visual entre islas
         orden = (pivot.groupby("grupo_cno")["brecha"].sum()
                  .sort_values().index.tolist())
         pivot["grupo_cno"] = pd.Categorical(
@@ -1246,8 +1308,8 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
                          color="#333333", size=0.5)
             + facet_wrap("~ isla", scales="fixed", ncol=ncol)
             + scale_fill_manual(
-                values={"Mayoría Hombres":"#4A90D9",
-                        "Mayoría Mujeres":"#D94A8C"}, name=None)
+                values={"Mayoría Hombres": "#4A90D9",
+                        "Mayoría Mujeres": "#D94A8C"}, name=None)
             + scale_y_continuous(labels=lambda l: [f"{v:+.1f}%" for v in l])
             + coord_flip()
             + labs(title=titulo,
