@@ -424,9 +424,9 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
     cbar.set_label("Índice de brecha salarial", fontsize=10)
     cbar.ax.text(0.5, -0.02, "mujeres", transform=cbar.ax.transAxes,
-                 ha="center", va="top", fontsize=8, color="#4A90D9")   # azul
+                 ha="center", va="top", fontsize=8, color="#D94A8C")   # rosa
     cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
-                 ha="center", va="bottom", fontsize=8, color="#D94A8C")  # rosa
+                 ha="center", va="bottom", fontsize=8, color="#4A90D9")  # azul
 
     fig.suptitle(f"Brecha salarial de género por municipio — Tenerife {AÑO_MAPA}",
                  fontsize=15, fontweight="bold", y=0.95)
