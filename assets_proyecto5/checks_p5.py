@@ -1382,10 +1382,11 @@ def check_datos_segregacion_sectorial(context):
              .sum().unstack("sexo").fillna(0))
              
     pivot["total"] = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
-    celdas_validas = int((pivot["total"] >= 30).sum())
+    MIN_C = cfg.get("min_contratos", 15)
+    celdas_validas = int((pivot["total"] >= MIN_C).sum())
     ok = celdas_validas >= 5
     passed = passed and ok
-    report_md += f"- Celdas con masa suficiente (n ≥ 30): {'🟢' if ok else '🔴'} ({celdas_validas} celdas)\n"
+    report_md += f"- Celdas con masa suficiente (n ≥ {MIN_C}): {'🟢' if ok else '🔴'} ({celdas_validas} celdas)\n"
 
     return AssetCheckResult(
         passed=bool(passed), severity=AssetCheckSeverity.WARN,

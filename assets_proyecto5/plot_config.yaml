@@ -87,3 +87,7 @@ ocupacion_divergente_canarias:
 
 mapa_feminizacion_municipios:
   ambito: "Canarias"
+
+heatmap_segregacion:
+  top_n: 15
+  min_contratos: 15

@@ -572,7 +572,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     pivot[["Hombres", "Mujeres"]] = pivot[["Hombres", "Mujeres"]].fillna(0)
 
     # Filtrar combinaciones con masa insuficiente (ratio inestable)
-    MIN_CONTRATOS = 30
+    MIN_CONTRATOS = cfg.get("min_contratos", 15)
     pivot = pivot[(pivot["Hombres"] + pivot["Mujeres"]) >= MIN_CONTRATOS].copy()
 
     pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
@@ -616,15 +616,27 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
             ax.plot([sub.min(), sub.max()], [y, y],
                     color="#dddddd", lw=3, solid_capstyle="round", zorder=2)
 
+    # Jitter vertical determinista por isla para evitar solapamientos en Y
+    ISLAS_LIST = list(COLORES_ISLAS.keys())
+    def get_island_jitter(isla_name):
+        try:
+            idx = ISLAS_LIST.index(isla_name)
+            # Distribuye uniformemente de -0.1 a 0.1
+            return -0.1 + idx * 0.033
+        except ValueError:
+            return 0.0
+
     # Puntos por isla
     for isla, color in COLORES_ISLAS.items():
         sub = pivot[pivot["isla"] == isla].copy()
         if sub.empty:
             continue
-        ys = [orden_act.index(a) for a in sub["actividad_short"]]
+        jitter = get_island_jitter(isla)
+        ys = [orden_act.index(a) + jitter for a in sub["actividad_short"]]
         ax.scatter(sub["ratio_hm"], ys,
                    color=color, s=70, zorder=4,
                    edgecolors="white", linewidths=0.6,
+                   alpha=0.85,  # Transparencia leve para discernir solapamientos
                    label=isla)
 
     # Punto de media por actividad (triángulo negro) como referencia agregada
