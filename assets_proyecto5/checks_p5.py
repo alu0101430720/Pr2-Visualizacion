@@ -12,7 +12,6 @@ from assets import preprocesar_datos_p5, commitear_plots_a_github
 from plots_assets import (
     plot_actividad_barras,
     plot_ocupacion_divergente,
-    plot_mapa_distribucion_renta,
     plot_brecha_salarial,
     plot_mapa_brecha_salarial,
     get_processed_path,
@@ -839,61 +838,6 @@ def check_datos_ocupacion_divergente(context):
     )
 
 
-@asset_check(
-    asset=plot_mapa_distribucion_renta,
-    description="Precondiciones para plot_mapa_distribucion_renta.",
-)
-def check_datos_mapa_distribucion(context):
-    """
-    Gestalt — Figura/Fondo: cobertura baja produce municipios grises que el
-    lector interpreta como valor bajo, no como dato faltante.
-    Gestalt — Similitud: un outlier extremo aplana el gradiente secuencial
-    haciendo que todo el territorio parezca homogéneo.
-    """
-    cfg        = get_plot_config()["mapa_distribucion"]
-    año        = cfg["ano"]
-    componente = cfg["componente"]
-    df         = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["OBS_VALUE"])
-    df_fil     = df[(df["año"] == año) & (df["MEDIDAS_CODE"] == componente)]
-    passed = True
-    report_md = f"### Precondiciones: mapa_distribucion ({componente}, {año})\n\n"
-
-    n  = len(df_fil)
-    ok = n > 0
-    passed = passed and ok
-    report_md += f"- Registros año={año}, componente={componente}: {'🟢' if ok else '🔴'} ({n})\n"
-
-    gjson = get_geojson_path(f"secciones_{año}0101_tenerife.json")
-    ok    = os.path.exists(gjson)
-    passed = passed and ok
-    report_md += f"- GeoJSON existe: {'🟢' if ok else '🔴'}\n"
-
-    if ok and n > 0:
-        try:
-            gdf = gpd.read_file(gjson)
-            gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
-            mun_gdf = set(gdf["municipio"].dropna().unique())
-            mun_csv = set(df_fil.groupby("municipio")["OBS_VALUE"].median().index)
-            cob     = len(mun_csv & mun_gdf) / len(mun_csv) if mun_csv else 0
-            ok_cob  = cob >= 0.8
-            passed  = passed and ok_cob
-            report_md += f"- Cobertura join municipio: {'🟢' if ok_cob else '🔴'} {cob:.0%}\n"
-            sin_match = mun_csv - mun_gdf
-            if sin_match:
-                report_md += f"  - Sin match: `{'`, `'.join(sorted(sin_match)[:8])}`\n"
-        except Exception as e:
-            report_md += f"- Cobertura join: ⚠️ {e}\n"
-
-    if n > 0:
-        q1, q3   = df_fil["OBS_VALUE"].quantile([0.25, 0.75])
-        outliers = int(((df_fil["OBS_VALUE"] < q1 - 3*(q3-q1)) | (df_fil["OBS_VALUE"] > q3 + 3*(q3-q1))).sum())
-        report_md += f"- Outliers extremos (IQR×3): {'🟢' if outliers == 0 else '⚠️'} {outliers}\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Mapa_Dist": MetadataValue.md(report_md)},
-    )
 
 
 @asset_check(
