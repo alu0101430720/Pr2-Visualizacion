@@ -307,8 +307,8 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     """
-    Lollipop chart horizontal: top N municipios con mayor variación absoluta
-    del índice de brecha salarial entre ano_ini y ano_fin.
+    Dumbbell chart (gráfico de mancuerna) horizontal: top N municipios con mayor 
+    variación absoluta del índice de brecha salarial entre ano_ini y ano_fin.
     Ordenado por |delta| descendente. Color = dirección del cambio.
     """
     cfg     = get_plot_config()["brecha_salarial"]
@@ -333,47 +333,66 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         lambda d: "Brecha aumenta" if d > UMBRAL
         else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante"))
 
-    # BUG FIX: usar .loc con los índices correctos, no .reindex()
+    # Selección del Top N basándonos en el cambio absoluto
     top_idx = slope["delta"].abs().nlargest(TOP_N).index
     top = slope.loc[top_idx].sort_values("delta", key=abs, ascending=True)
 
-    # Mediana sobre TODOS los municipios (no solo el top N)
-    mediana_todos = float(merged[merged["año"].isin([AÑO_INI, AÑO_FIN])]["indice_brecha"].median())
+    # Preparar datos en formato LONG (se incluye 'delta' para mantener el orden en el eje Y)
+    top_long = pd.concat([
+        top[["municipio", "brecha_ini", "direccion", "delta"]].rename(columns={"brecha_ini": "valor"}).assign(momento="ini"),
+        top[["municipio", "brecha_fin", "direccion", "delta"]].rename(columns={"brecha_fin": "valor"}).assign(momento="fin"),
+    ])
 
     COLORES = {
-        "Brecha aumenta":       pal["BM"],   # rosa → favorece a hombres (sube ratio H)
-        "Brecha disminuye":     pal["BH"],   # azul → favorece a mujeres
+        "Brecha aumenta":       pal["BH"],
+        "Brecha disminuye":     pal["BM"],
         "Sin cambio relevante": "#AAAAAA",
     }
 
     p = (
-        ggplot(top, aes(x="reorder(municipio, delta)", y="delta", fill="direccion"))
-        + geom_col(width=0.65, alpha=0.9)
-        + geom_hline(yintercept=0, linetype="dashed", color="#333333", size=0.4)
-        + scale_fill_manual(values=COLORES, name=None)
-        + coord_flip()
+        ggplot(top_long, aes(x="valor", y="reorder(municipio, delta)", color="direccion"))
+
+        # Segmento horizontal que conecta el inicio con el fin
+        + geom_segment(
+            data=top,
+            mapping=aes(x="brecha_ini", xend="brecha_fin",
+                        y="reorder(municipio, delta)", yend="reorder(municipio, delta)",
+                        color="direccion"),
+            size=1.2, alpha=0.5,
+            inherit_aes=False,
+        )
+        # Punto de inicio: Año Inicial (círculo hueco)
+        + geom_point(data=top_long[top_long["momento"] == "ini"],
+                     size=3, shape="o", fill="white", stroke=1.2)
+        # Punto de fin: Año Final (círculo relleno)
+        + geom_point(data=top_long[top_long["momento"] == "fin"],
+                     size=4)
+
+        + geom_vline(xintercept=0, linetype="dashed", color="#cccccc", size=0.5)
+        + scale_color_manual(values=COLORES, name=None)
         + labs(
-            title="Municipios con mayor cambio en brecha salarial de género",
-            subtitle=(f"Δ índice entre {AÑO_INI} y {AÑO_FIN} · "
-                      f"Top {TOP_N} por variación absoluta · "
-                      f"+ = brecha aumenta  /  − = brecha disminuye"),
-            x=None, y="Cambio en índice de brecha salarial",
+            title="Cambio en brecha salarial por municipio",
+            subtitle=f"○ = {AÑO_INI}   ● = {AÑO_FIN}  ·  Top {TOP_N} por mayor variación",
+            x="Índice de brecha salarial", y=None,
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
         + theme_minimal()
         + theme(
             figure_size=(10, 5),
-            plot_title=element_text(size=14, face="bold"),
+            plot_title=element_text(size=13, face="bold"),
             plot_subtitle=element_text(size=10, color="#555555"),
             panel_grid_major_y=element_blank(),
-            panel_grid_minor=element_blank(),
             legend_position="bottom",
         )
     )
-    out = os.path.join(get_plot_dir(), "brecha_salarial_lollipop.png")
+
+    # Guardar y registrar metadatos en Dagster
+    out = os.path.join(get_plot_dir(), "brecha_salarial_plot.png")
     p.save(out, width=10, height=5, dpi=150, verbose=False)
+    
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Brecha Salarial Lollipop]({out})")})
+        {"plot": MetadataValue.md(f"![Brecha Salarial Plot]({out})")}
+    )
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
