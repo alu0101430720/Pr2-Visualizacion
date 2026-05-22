@@ -496,7 +496,7 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     """
     Heatmap ratio H/(H+M) por sector e isla — Canarias, Marzo 2026.
-    Cmap azul→blanco→rosa (coherente con paleta del proyecto).
+    Última columna: ratio agregado de Canarias como línea base de referencia.
     """
     pal = get_paleta()
 
@@ -531,7 +531,6 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     )
     pivot.columns.name = None
 
-    # BUG FIX: garantizar columnas aunque un sexo no tenga contratos en un sector
     for col in ["Hombres", "Mujeres"]:
         if col not in pivot.columns:
             pivot[col] = 0
@@ -539,7 +538,6 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
 
     pivot["ratio_hm"] = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
 
-    # BUG FIX: actividades sin abreviatura → usar nombre corto por longitud
     pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV).fillna(
         pivot["Actividad económica"].str[:25]
     )
@@ -555,16 +553,26 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     heat = (pivot.pivot(index="actividad_short", columns="isla", values="ratio_hm")
             .reindex(index=orden_act, columns=ISLAS_ORD))
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # Columna Canarias: ratio agregado de todas las islas por sector.
+    # Permite ver de un vistazo si una isla diverge del patrón canario general
+    # sin tener que memorizar los valores de cada celda.
+    ratio_can = (
+        pivot.groupby("actividad_short")[["Hombres", "Mujeres"]]
+        .sum()
+        .assign(ratio=lambda d: d["Hombres"] / (d["Hombres"] + d["Mujeres"]))
+        ["ratio"]
+    )
+    heat["CANARIAS"] = heat.index.map(ratio_can)
+    ISLAS_ORD = ISLAS_ORD + ["CANARIAS"]
+    ISLAS_LBL = ISLAS_LBL + ["Canarias\n(total)"]
+    IDX_SEP   = len(ISLAS_ORD) - 1   # índice de la columna de referencia
+
+    fig, ax = plt.subplots(figsize=(14, 6))
     fig.patch.set_facecolor("white")
 
     norm_c = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
-    # BUG FIX: usar directamente el objeto cmap, no plt.get_cmap()
     cmap_c = pal["cmap_brecha"]
 
-    # Celdas sin datos: fondo gris neutro ANTES del imshow principal.
-    # Blanco = paridad en el gradiente, así que dejar NaN en blanco
-    # sería perceptivamente idéntico a "50% hombres" — error Gestalt grave.
     mask_nan = np.isnan(heat.values)
     if mask_nan.any():
         nan_cmap = mcolors.ListedColormap(["#cccccc"])
@@ -576,6 +584,11 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
 
     ax.set_xticks(range(len(ISLAS_ORD)))
     ax.set_xticklabels(ISLAS_LBL, fontsize=10, fontweight="bold")
+    # La etiqueta de Canarias en negrita y ligeramente distinta para destacarla
+    for tick, lbl in zip(ax.get_xticklabels(), ISLAS_LBL):
+        if "Canarias" in lbl:
+            tick.set_color("#333333")
+            tick.set_style("italic")
     ax.set_yticks(range(len(orden_act)))
     ax.set_yticklabels(orden_act, fontsize=10)
     ax.tick_params(left=False, bottom=False)
@@ -584,6 +597,8 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
         ax.axhline(i - 0.5, color="white", lw=1.2)
     for j in range(len(ISLAS_ORD) + 1):
         ax.axvline(j - 0.5, color="white", lw=1.2)
+    # Separador más grueso entre islas individuales y columna de referencia
+    ax.axvline(IDX_SEP - 0.5, color="#555555", lw=2.5, zorder=5)
 
     ax.set_xlim(-0.5, len(ISLAS_ORD) - 0.5)
     ax.set_ylim(-0.5, len(orden_act) - 0.5)
@@ -597,8 +612,6 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
 
     ax.set_title("Segregación de género por sector e isla — Canarias, Marzo 2026",
                  fontsize=13, fontweight="bold", pad=12)
-    # BUG FIX: texto actualizado para reflejar el cmap azul/rosa
-    # La entrada "Sin datos" se añade solo si hay NaN en el heatmap
     pie = "Azul = mayoría mujeres · Rosa = mayoría hombres · Blanco = paridad"
     if mask_nan.any():
         pie += "  ·  ▪ Gris = sin datos"
@@ -611,8 +624,6 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Heatmap Segregación]({out})")})
-
-
 # ── COVID helpers ─────────────────────────────────────────────────────────────
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_desigualdad_y_renta")
