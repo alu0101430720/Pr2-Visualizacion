@@ -654,7 +654,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     media_handle = plt.scatter([], [], marker="D", s=30, color="#333333",
                                label="Media Canarias")
     handles.append(media_handle)
-    ax.legend(handles=handles, loc="lower right",
+    ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0),
               fontsize=8.5, frameon=False, title="Isla", title_fontsize=8.5)
 
     ax.set_title(
