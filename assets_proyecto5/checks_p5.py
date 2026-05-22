@@ -19,7 +19,7 @@ from plots_assets import (
     get_paleta,
     get_plot_dir,
     plot_gini_evolucion_islas,
-    plot_heatmap_segregacion_sectorial,
+    plot_segregacion_sectorial,
     plot_covid_sueldos_islas,
     plot_covid_prestaciones_islas,
     plot_brecha_temporal_edad,
@@ -144,7 +144,7 @@ PNG_ESPERADOS = [
     "brecha_salarial_lollipop.png",       # era slope, ahora lollipop
     "mapa_brecha_salarial.png",
     "gini_evolucion_islas.png",
-    "heatmap_segregacion_sectorial.png",
+    "segregacion_sectorial_dotplot.png",
     "covid_sueldos_islas.png",
     "covid_prestaciones_islas.png",
     "brecha_temporal_parcial_edad.png",
@@ -1333,22 +1333,20 @@ def check_datos_historico_contratos(context):
 
 
 @asset_check(
-    asset=plot_heatmap_segregacion_sectorial,
+    asset=plot_segregacion_sectorial,
     description=(
         "Verifica que contratos_202603.csv tiene las 7 islas, ambos sexos, "
-        "top-12 actividades con masa suficiente y TwoSlopeNorm viable."
+        "y actividades con masa suficiente para el Cleveland dot plot."
     ),
 )
-def check_datos_heatmap_segregacion(context):
+def check_datos_segregacion_sectorial(context):
     """
-    Gestalt — Similitud: TwoSlopeNorm centrada en 0.5 requiere que haya
-    celdas por encima y por debajo de la paridad.
-    Gestalt — Proximidad: las 7 islas deben estar presentes para que la
-    lectura izquierda→derecha tenga sentido geográfico.
-    Gestalt — Cierre: con n < 10 contratos el ratio H/M es inestable.
+    Gestalt — Similitud: color coherente por isla.
+    Gestalt — Proximidad: puntos agrupados por actividad.
+    Cierre/Masa: requiere un mínimo de 30 contratos por celda (isla-actividad) para ser representativo.
     """
     passed   = True
-    report_md = "### Check: heatmap_segregacion_sectorial\n\n"
+    report_md = "### Check: segregacion_sectorial_dotplot\n\n"
 
     fpath = get_processed_path("contratos_202603.csv")
     if not os.path.exists(fpath):
@@ -1374,21 +1372,20 @@ def check_datos_heatmap_segregacion(context):
     passed = passed and ok
     report_md += f"- 7 islas presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
 
+    cfg   = get_plot_config().get("heatmap_segregacion", {})
+    TOP_N = cfg.get("top_n", 15)
     top_act = (df.groupby("Actividad económica")["Contratos"]
-               .sum().nlargest(12).index.tolist())
+               .sum().nlargest(TOP_N).index.tolist())
+    
     pivot = (df[df["Actividad económica"].isin(top_act)]
              .groupby(["Actividad económica","isla","sexo"])["Contratos"]
              .sum().unstack("sexo").fillna(0))
-    pivot["ratio"] = pivot.get("Hombres",0) / (
-        pivot.get("Hombres",0) + pivot.get("Mujeres",0) + 1e-9)
-    celdas_escasas = int(((pivot.get("Hombres",0) + pivot.get("Mujeres",0)) < 10).sum())
-    ok = celdas_escasas < 5
+             
+    pivot["total"] = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
+    celdas_validas = int((pivot["total"] >= 30).sum())
+    ok = celdas_validas >= 5
     passed = passed and ok
-    report_md += f"- Celdas con n < 10 contratos: {'🟢' if ok else '⚠️'} ({celdas_escasas})\n"
-
-    ok = bool((pivot["ratio"] > 0.5).any()) and bool((pivot["ratio"] < 0.5).any())
-    passed = passed and ok
-    report_md += f"- Ratios por encima y debajo de 0.5 (TwoSlopeNorm): {'🟢' if ok else '🔴'}\n"
+    report_md += f"- Celdas con masa suficiente (n ≥ 30): {'🟢' if ok else '🔴'} ({celdas_validas} celdas)\n"
 
     return AssetCheckResult(
         passed=bool(passed), severity=AssetCheckSeverity.WARN,

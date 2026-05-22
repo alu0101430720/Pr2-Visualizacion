@@ -496,12 +496,25 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
-def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
+def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     """
-    Heatmap ratio H/(H+M) por sector e isla — Canarias, Marzo 2026.
-    Cmap azul→blanco→rosa (coherente con paleta del proyecto).
+    Dot plot de Cleveland: ratio H/(H+M) por actividad e isla.
+    Historia: ¿cómo varía la segregación de cada actividad entre islas?
+
+    Gramática de gráficos:
+      - Canal principal: posición en eje X común (el más preciso, Cleveland 1984)
+      - Canal secundario: color por isla (identidad, no magnitud)
+      - Facet por actividad: comparación entre islas dentro de cada panel
+      - Línea de referencia en 0.5 (paridad) como figura; puntos como fondo
+
+    Gestalt:
+      - Proximidad: puntos de la misma actividad en el mismo panel
+      - Continuidad: línea de paridad guía la lectura horizontal
+      - Similitud: color por isla coherente con el resto del proyecto
+      - Figura/Fondo: línea gris clara de fondo, puntos de color en primer plano
     """
-    pal = get_paleta()
+    cfg   = get_plot_config().get("heatmap_segregacion", {})
+    TOP_N = cfg.get("top_n", 15)
 
     df = pd.read_csv(get_processed_path("contratos_202603.csv"))
     df.columns = df.columns.str.strip()
@@ -509,7 +522,7 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
         df[col] = df[col].str.strip()
 
     top_act = (df.groupby("Actividad económica")["Contratos"]
-               .sum().nlargest(12).index.tolist())
+               .sum().nlargest(TOP_N).index.tolist())
 
     ABREV = {
         "Producción cinematográfica, de vídeo y de programas de televisión, "
@@ -518,86 +531,148 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
         "Actividades de construcción especializada":             "Construcción esp.",
         "Administración pública y defensa; seguridad social obligatoria": "Adm. pública",
         "Actividades de creación artística y artes escénicas":   "Artes escénicas",
-        "Actividades sanitarias":       "Sanidad",
-        "Servicios de alojamiento":     "Alojamiento",
-        "Servicios de comidas y bebidas": "Hostelería",
-        "Comercio al por menor":        "Comercio minorista",
-        "Comercio al por mayor":        "Comercio mayorista",
-        "Educación":                    "Educación",
-        "Construcción de edificios":    "Construcción",
+        "Actividades sanitarias":                                "Sanidad",
+        "Servicios de alojamiento":                              "Alojamiento",
+        "Servicios de comidas y bebidas":                        "Hostelería",
+        "Comercio al por menor":                                 "Comercio minorista",
+        "Comercio al por mayor":                                 "Comercio mayorista",
+        "Educación":                                             "Educación",
+        "Construcción de edificios":                             "Construcción",
+        "Agricultura, ganadería, caza y servicios relacionados": "Agricultura",
+        "Pesca y acuicultura":                                   "Pesca",
+        "Transporte terrestre y por tubería":                    "Transporte",
+        "Almacenamiento y actividades anexas al transporte":     "Almacenamiento",
+        "Actividades deportivas, recreativas y de entretenimiento": "Deporte/recreación",
+        "Asistencia en establecimientos residenciales":          "Asist. residencial",
+        "Actividades de servicios sociales sin alojamiento":     "Servicios sociales",
+        "Actividades de empleo":                                 "Activ. de empleo",
     }
 
+    # Colores por isla coherentes con el proyecto
+    COLORES_ISLAS = {
+        "Tenerife":      "#e07b39",
+        "Lanzarote":     "#e9c46a",
+        "Fuerteventura": "#f4a261",
+        "Gran Canaria":  "#a8c5da",
+        "La Palma":      "#b5c8b8",
+        "La Gomera":     "#c9b8d0",
+        "El Hierro":     "#d4c5b0",
+    }
+
+    # ── Preparar datos ────────────────────────────────────────────────────────
     pivot = (
         df[df["Actividad económica"].isin(top_act)]
         .groupby(["Actividad económica", "isla", "sexo"])["Contratos"]
         .sum().unstack("sexo").reset_index()
     )
     pivot.columns.name = None
-
-    # BUG FIX: garantizar columnas aunque un sexo no tenga contratos en un sector
     for col in ["Hombres", "Mujeres"]:
         if col not in pivot.columns:
             pivot[col] = 0
     pivot[["Hombres", "Mujeres"]] = pivot[["Hombres", "Mujeres"]].fillna(0)
 
-    pivot["ratio_hm"] = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
+    # Filtrar combinaciones con masa insuficiente (ratio inestable)
+    MIN_CONTRATOS = 30
+    pivot = pivot[(pivot["Hombres"] + pivot["Mujeres"]) >= MIN_CONTRATOS].copy()
 
-    # BUG FIX: actividades sin abreviatura → usar nombre corto por longitud
+    pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
     pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV).fillna(
-        pivot["Actividad económica"].str[:25]
-    )
+        pivot["Actividad económica"].str[:30])
+    pivot["isla"] = pivot["isla"].str.strip().str.title()
 
-    ISLAS_ORD = ["EL HIERRO", "LA GOMERA", "LA PALMA", "TENERIFE",
-                 "GRAN CANARIA", "LANZAROTE", "FUERTEVENTURA"]
-    ISLAS_LBL = ["El\nHierro", "La\nGomera", "La\nPalma", "Tenerife",
-                 "Gran\nCanaria", "Lanzarote", "Fuerte-\nventura"]
-
+    # Ordenar actividades por ratio medio (más feminizadas arriba,
+    # más masculinizadas abajo) — Gestalt: orden emergente sin leyenda
     orden_act = (pivot.groupby("actividad_short")["ratio_hm"]
-                 .mean().sort_values(ascending=True).index.tolist())
+                 .mean().sort_values(ascending=False).index.tolist())
+    pivot["actividad_short"] = pd.Categorical(
+        pivot["actividad_short"], categories=orden_act, ordered=True)
 
-    heat = (pivot.pivot(index="actividad_short", columns="isla", values="ratio_hm")
-            .reindex(index=orden_act, columns=ISLAS_ORD))
+    # Ratio medio por actividad (para la barra de referencia de fondo)
+    media_act = (pivot.groupby("actividad_short")["ratio_hm"]
+                 .mean().reset_index(name="media"))
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    # ── Plot ──────────────────────────────────────────────────────────────────
+    n_act    = len(orden_act)
+    fig_h    = max(6, n_act * 0.55)
+    fig, ax  = plt.subplots(figsize=(10, fig_h))
     fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
 
-    norm_c = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
-    cmap_c = LinearSegmentedColormap.from_list(
-        "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
-    )
-    ax.imshow(heat.values, cmap=cmap_c, norm=norm_c, aspect="auto")
+    # Franjas alternadas muy suaves para guiar el ojo entre filas
+    for i, act in enumerate(orden_act):
+        if i % 2 == 0:
+            ax.axhspan(i - 0.45, i + 0.45, color="#f7f7f7", zorder=0)
 
-    ax.set_xticks(range(len(ISLAS_ORD)))
-    ax.set_xticklabels(ISLAS_LBL, fontsize=10, fontweight="bold")
-    ax.set_yticks(range(len(orden_act)))
-    ax.set_yticklabels(orden_act, fontsize=10)
-    ax.tick_params(left=False, bottom=False)
+    # Línea de paridad (figura principal)
+    ax.axvline(0.5, color="#bbbbbb", lw=1.2, ls="--", zorder=1)
+    ax.text(0.5, -0.7, "paridad", ha="center", va="top",
+            fontsize=7.5, color="#aaaaaa", style="italic")
 
-    for i in range(len(orden_act) + 1):
-        ax.axhline(i - 0.5, color="white", lw=1.2)
-    for j in range(len(ISLAS_ORD) + 1):
-        ax.axvline(j - 0.5, color="white", lw=1.2)
+    # Segmento horizontal del rango inter-isla por actividad (dispersión visual)
+    for act in orden_act:
+        sub = pivot[pivot["actividad_short"] == act]["ratio_hm"]
+        if len(sub) >= 2:
+            y = orden_act.index(act)
+            ax.plot([sub.min(), sub.max()], [y, y],
+                    color="#dddddd", lw=3, solid_capstyle="round", zorder=2)
 
-    ax.set_xlim(-0.5, len(ISLAS_ORD) - 0.5)
-    ax.set_ylim(-0.5, len(orden_act) - 0.5)
+    # Puntos por isla
+    for isla, color in COLORES_ISLAS.items():
+        sub = pivot[pivot["isla"] == isla].copy()
+        if sub.empty:
+            continue
+        ys = [orden_act.index(a) for a in sub["actividad_short"]]
+        ax.scatter(sub["ratio_hm"], ys,
+                   color=color, s=70, zorder=4,
+                   edgecolors="white", linewidths=0.6,
+                   label=isla)
 
-    cb = fig.colorbar(ScalarMappable(norm=norm_c, cmap=cmap_c),
-                      ax=ax, orientation="vertical", shrink=0.8, pad=0.02)
-    cb.set_label("% hombres contratados", fontsize=9)
-    cb.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
-    cb.set_ticklabels(["0%\n(solo mujeres)", "25%", "50%\n(paridad)",
-                       "75%", "100%\n(solo hombres)"])
+    # Punto de media por actividad (triángulo negro) como referencia agregada
+    for act in orden_act:
+        row = media_act[media_act["actividad_short"] == act]
+        if not row.empty:
+            y = orden_act.index(act)
+            ax.scatter(row["media"].values[0], y,
+                       marker="D", s=30, color="#333333",
+                       zorder=5, edgecolors="white", linewidths=0.5)
 
-    ax.set_title("Segregación de género por sector e isla — Canarias, Marzo 2026",
-                 fontsize=13, fontweight="bold", pad=12)
+    # Ejes
+    ax.set_yticks(range(n_act))
+    ax.set_yticklabels(orden_act, fontsize=9.5)
+    ax.set_xlim(0.0, 1.0)
+    ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
+    ax.set_xticklabels(["0%", "25%", "50%\n(paridad)", "75%", "100%"],
+                       fontsize=8.5)
+    ax.set_xlabel("% hombres contratados", fontsize=10)
+    ax.xaxis.grid(True, color="#eeeeee", zorder=0)
+    ax.spines[["top", "right", "left"]].set_visible(False)
+    ax.spines["bottom"].set_color("#dddddd")
+    ax.tick_params(axis="y", length=0)
 
-    plt.tight_layout()
-    out = os.path.join(get_plot_dir(), "heatmap_segregacion_sectorial.png")
+    # Leyenda islas + símbolo de media
+    handles, labels = ax.get_legend_handles_labels()
+    media_handle = plt.scatter([], [], marker="D", s=30, color="#333333",
+                               label="Media Canarias")
+    handles.append(media_handle)
+    ax.legend(handles=handles, loc="lower right",
+              fontsize=8.5, frameon=False, title="Isla", title_fontsize=8.5)
+
+    ax.set_title(
+        f"Segregación de género por actividad e isla — Canarias, Marzo 2026\n"
+        f"Top {TOP_N} actividades por volumen · n ≥ {MIN_CONTRATOS} contratos por celda",
+        fontsize=12, fontweight="bold", pad=12)
+    fig.text(
+        0.01, 0.0,
+        "◆ = media Canarias  ·  barra gris = rango entre islas  "
+        "·  Fuente: SEPE / OBECAN",
+        fontsize=8, color="#666666")
+
+    plt.tight_layout(rect=[0, 0.02, 1, 1])
+    out = os.path.join(get_plot_dir(), "segregacion_sectorial_dotplot.png")
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Heatmap Segregación]({out})")})
-
+        {"plot": MetadataValue.md(f"![Segregación dot plot]({out})")})
 
 # ── COVID helpers ─────────────────────────────────────────────────────────────
 
