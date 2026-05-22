@@ -643,11 +643,6 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
 
     ax.set_title("Segregación de género por sector e isla — Canarias, Marzo 2026",
                  fontsize=13, fontweight="bold", pad=12)
-    # BUG FIX: texto actualizado para reflejar el cmap azul/rosa
-    fig.text(0.01, -0.02,
-             "Azul = mayoría mujeres · Rosa = mayoría hombres · "
-             "Blanco = paridad  ·  Fuente: SEPE / OBECAN · Contratos marzo 2026",
-             fontsize=8, color="#666666")
 
     plt.tight_layout()
     out = os.path.join(get_plot_dir(), "heatmap_segregacion_sectorial.png")
