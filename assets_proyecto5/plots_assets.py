@@ -658,8 +658,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
               fontsize=8.5, frameon=False, title="Isla", title_fontsize=8.5)
 
     ax.set_title(
-        f"Segregación de género por actividad e isla — Canarias, Marzo 2026\n"
-        f"Top {TOP_N} actividades por volumen · n ≥ {MIN_CONTRATOS} contratos por celda",
+        "Segregación de género por actividad e isla — Canarias, Marzo 2026",
         fontsize=12, fontweight="bold", pad=12)
     fig.text(
         0.01, 0.0,
