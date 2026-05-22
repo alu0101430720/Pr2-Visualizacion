@@ -245,62 +245,6 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
     p.save(out, width=14, height=8, dpi=150, verbose=False)
     context.add_output_metadata({"plot": MetadataValue.md(f"![Actividad Barras]({out})")})
 
-
-@asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
-def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
-    cfg = get_plot_config()["ocupacion_divergente"]
-    pal = get_paleta()
-
-    df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["num_casos"])
-    df = df[df["sexo"].isin(["Hombres", "Mujeres"]) & (df["ocupacion"] != "No consta")]
-
-    # Filtro opcional por año
-    ano = cfg.get("ano", None)
-    ano_label = ""
-    if ano is not None:
-        df = df[df["año"] == ano]
-        ano_label = f" — {ano}"
-
-    agg   = df.groupby(["ocupacion", "sexo"], as_index=False)["num_casos"].sum()
-    pivot = agg.pivot(index="ocupacion", columns="sexo", values="num_casos").reset_index()
-    pivot["brecha"]    = pivot["Hombres"] - pivot["Mujeres"]
-    pivot["direccion"] = pivot["brecha"].apply(
-        lambda x: "Mayoría Hombres" if x > 0 else "Mayoría Mujeres")
-
-    # textwrap en lugar de corte fijo para no partir palabras
-    pivot["ocupacion_wrap"] = pivot["ocupacion"].apply(
-        lambda s: "\n".join(textwrap.wrap(s, 40)))
-
-    p = (
-        ggplot(pivot, aes(x="reorder(ocupacion_wrap, brecha)",
-                          y="brecha", fill="direccion"))
-        + geom_col(width=0.65, alpha=0.9)
-        + geom_hline(yintercept=0, linetype="dashed", color="#333333", size=0.4)
-        + scale_fill_manual(values={"Mayoría Hombres": pal["BH"],
-                                    "Mayoría Mujeres": pal["BM"]})
-        + scale_y_continuous(labels=fmt_k)
-        + coord_flip()
-        + labs(
-            title=f"Brecha de género por ocupación — Tenerife{ano_label}",
-            subtitle="Diferencia acumulada (Hombres − Mujeres)",
-            x=None, y=None, fill=None,
-            caption="Fuente: ISTAC",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(12, 6),
-            plot_title=element_text(size=13, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            panel_grid_major_y=element_blank(),
-            panel_grid_major_x=element_line(color="#dddddd", size=0.4),
-            legend_position="bottom",
-        )
-    )
-    out = os.path.join(get_plot_dir(), "ocupacion_divergente.png")
-    p.save(out, width=12, height=6, dpi=150, verbose=False)
-    context.add_output_metadata({"plot": MetadataValue.md(f"![Ocupacion Divergente]({out})")})
-
-
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     """
