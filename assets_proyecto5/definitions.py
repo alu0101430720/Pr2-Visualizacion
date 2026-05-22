@@ -7,7 +7,8 @@ from dagster import (
     sensor,
     SensorEvaluationContext,
     RunRequest,
-    DefaultSensorStatus
+    DefaultSensorStatus,
+    AssetKey
 )
 import os
 import glob
@@ -119,6 +120,68 @@ def dataset_sensor(context: SensorEvaluationContext):
             message="Se detectaron adiciones o modificaciones en los conjuntos de datos de data-P5."
         )
 
+
+@sensor(
+    job=visualizaciones_job,
+    default_status=DefaultSensorStatus.RUNNING,
+    description="Sensor que detecta si falta algún gráfico en la carpeta plots y lo genera automáticamente."
+)
+def missing_plots_sensor(context: SensorEvaluationContext):
+    """
+    Sensor que lee 'plots.yaml', verifica la existencia de cada archivo PNG
+    en la carpeta 'plots' y lanza una ejecución para generar los que falten.
+    """
+    import yaml
+    import config
+    
+    # Ruta del plots.yaml
+    yaml_path = os.path.join(os.path.dirname(__file__), "plots.yaml")
+    if not os.path.exists(yaml_path):
+        context.log.warning(f"No se encontró el archivo plots.yaml en: {yaml_path}")
+        return
+        
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        plots_cfg = yaml.safe_load(f) or {}
+        
+    expected_plots = plots_cfg.get("expected_plots", [])
+    if not expected_plots:
+        context.log.warning("No hay gráficos definidos en plots.yaml.")
+        return
+        
+    # Directorio de plots
+    plot_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR, "plots")
+    
+    # Identificar cuáles gráficos faltan
+    missing_assets = []
+    missing_filenames = []
+    
+    for item in expected_plots:
+        filename = item.get("filename")
+        asset_name = item.get("asset_name")
+        if not filename or not asset_name:
+            continue
+            
+        file_path = os.path.join(plot_dir, filename)
+        if not os.path.exists(file_path):
+            missing_assets.append(AssetKey(asset_name))
+            missing_filenames.append(filename)
+            
+    if not missing_assets:
+        context.log.info("Todos los gráficos esperados están presentes en la carpeta plots.")
+        return
+        
+    context.log.info(f"Gráficos faltantes detectados: {missing_filenames}. Generando ejecución para recrearlos...")
+    
+    # Creamos un run_key basado en la lista de archivos que faltan para no duplicar ejecuciones si ya está en curso
+    missing_filenames.sort()
+    run_key = f"missing_plots_{'_'.join(missing_filenames)}"
+    
+    return RunRequest(
+        run_key=run_key,
+        asset_selection=missing_assets,
+        message=f"Ejecución disparada automáticamente por falta de gráficos: {', '.join(missing_filenames)}"
+    )
+
 # ══════════════════════════════════════════════════════════════════════════════
 # DEFINITIONS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -127,5 +190,5 @@ defs = Definitions(
     assets=all_assets,
     asset_checks=all_checks,
     jobs=[completo_job, ingesta_preprocesado_job, visualizaciones_job, publicacion_job],
-    sensors=[dataset_sensor],
+    sensors=[dataset_sensor, missing_plots_sensor],
 )
