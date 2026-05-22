@@ -230,7 +230,7 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
             title=f"Actividad económica por año y sexo — "
                   f"{ISLA if ISLA != 'Todas' else 'Toda la provincia'}",
             subtitle=subtitle,
-            x=None, y=y_label, fill="Sexo",
+            x="", y=y_label, fill="Sexo",
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
@@ -286,7 +286,7 @@ def plot_ocupacion_divergente(context: AssetExecutionContext) -> None:
         + labs(
             title=f"Brecha de género por ocupación — Tenerife{ano_label}",
             subtitle="Diferencia acumulada (Hombres − Mujeres)",
-            x=None, y=None, fill=None,
+            x="", y="", fill=None,
             caption="Fuente: ISTAC",
         )
         + theme_minimal()
@@ -357,7 +357,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             subtitle=(f"Δ índice entre {AÑO_INI} y {AÑO_FIN} · "
                       f"Top {TOP_N} por variación absoluta · "
                       f"+ = brecha aumenta  /  − = brecha disminuye"),
-            x=None, y="Cambio en índice de brecha salarial",
+            x="", y="Cambio en índice de brecha salarial",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
         + theme_minimal()
@@ -1257,7 +1257,7 @@ def plot_actividad_barras_canarias(context: AssetExecutionContext) -> None:
             + coord_flip()
             + labs(title=titulo,
                    subtitle=f"Top {TOP_N} sectores por volumen de contratos",
-                   x=None, y="Nº contratos",
+                   x="", y="Nº contratos",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((11, 6))
         )
@@ -1278,7 +1278,7 @@ def plot_actividad_barras_canarias(context: AssetExecutionContext) -> None:
             + coord_flip()
             + labs(title=titulo,
                    subtitle=f"Top {TOP_N} sectores · escala X libre por isla",
-                   x=None, y="Nº contratos",
+                   x="", y="Nº contratos",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((16, 10))
             + theme(strip_text=element_text(size=9, face="bold"))
@@ -1361,7 +1361,7 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + coord_flip()
             + labs(title=titulo,
                    subtitle=subtitulo,
-                   x=None, y="% sobre total contratos (Hombres − Mujeres)",
+                   x="", y="% sobre total contratos (Hombres − Mujeres)",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((11, 6))
         )
@@ -1411,7 +1411,7 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + coord_flip()
             + labs(title=titulo,
                    subtitle="Diferencia (H − M) como % del total de contratos de cada isla · grupos CNO-1 · escala compartida",
-                   x=None, y="% sobre total contratos (Hombres − Mujeres)",
+                   x="", y="% sobre total contratos (Hombres − Mujeres)",
                    caption="Fuente: OBECAN / SEPE")
             + _tema_base((16, 10))
             + theme(strip_text=element_text(size=9, face="bold"))
