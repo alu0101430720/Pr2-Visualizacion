@@ -615,8 +615,9 @@ def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
     fig.patch.set_facecolor("white")
 
     norm_c = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
-    # BUG FIX: usar directamente el objeto cmap, no plt.get_cmap()
-    cmap_c = pal["cmap_brecha"]
+    cmap_c = LinearSegmentedColormap.from_list(
+        "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
+    )
     ax.imshow(heat.values, cmap=cmap_c, norm=norm_c, aspect="auto")
 
     ax.set_xticks(range(len(ISLAS_ORD)))
