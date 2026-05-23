@@ -64,10 +64,9 @@ brecha_salarial:
 
 brecha_temporal_edad:
   isla: "Tenerife"
-  # Opciones: "Todas", "Tenerife", "Gran Canaria", "Lanzarote",
-  #           "Fuerteventura", "La Palma", "La Gomera", "El Hierro"
-  # anotar_solo_mayor: true → solo etiqueta la barra más alta por panel
   anotar_solo_mayor: true
+  ano: 2026
+  mes: 3
 
 # ── Control eje Y: true = desde 0 / false = truncado con símbolo // ──────────
 
@@ -101,3 +100,9 @@ mapa_feminizacion_municipios:
 heatmap_segregacion:
   top_n: 15
   min_contratos: 15
+  ano: 2025
+  mes: 12
+
+historico_tipos_contrato:
+  ano_fin: 2026
+  mes_fin: 3

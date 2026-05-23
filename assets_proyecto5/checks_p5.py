@@ -1279,50 +1279,61 @@ def check_datos_historico_contratos(context):
     passed = True
     report_md = "### Precondiciones: historico_tipos_contrato_por_edad (2×2)\n\n"
 
+    from plots_assets import get_processed_contratos
+    cfg = get_plot_config().get("historico_tipos_contrato", {})
+    AÑO_FIN = cfg.get("ano_fin", 2026)
+    MES_FIN = cfg.get("mes_fin", 3)
+
+    processed_paths = get_processed_contratos(AÑO_FIN, MES_FIN)
+    has_latest = len(processed_paths) > 0
+    fpath_latest = processed_paths[0] if has_latest else None
+
     # Años disponibles
     años_encontrados = []
-    for año in range(2019, 2026):
-        if os.path.exists(os.path.join(data_dir, f"contratos{año}.csv")):
-            años_encontrados.append(año)
-    for año in [2023, 2024, 2025]:
-        patron = os.path.join(data_dir, str(año), "contratos_registrados_*.csv")
-        if glob.glob(patron):
-            if año not in años_encontrados:
+    for año in range(2019, AÑO_FIN):
+        if año in (2019, 2020, 2021, 2022):
+            if os.path.exists(os.path.join(data_dir, f"contratos{año}.csv")):
                 años_encontrados.append(año)
-    has_2026 = os.path.exists(os.path.join(data_dir, "processed", "contratos_202603.csv"))
-    if has_2026:
-        años_encontrados.append(2026)
+        else:
+            patron = os.path.join(data_dir, str(año), "contratos_*.csv")
+            if glob.glob(patron):
+                años_encontrados.append(año)
+    if has_latest:
+        años_encontrados.append(AÑO_FIN)
 
     n_años = len(años_encontrados)
     ok = n_años >= 4
     passed = passed and ok
     report_md += f"- Años disponibles ≥ 4 (inflexión 2022 visible): {'🟢' if ok else '🔴'} ({sorted(años_encontrados)})\n"
-    report_md += f"- Datos 2026 (marzo) presentes: {'🟢' if has_2026 else '🔴'}\n"
+    report_md += f"- Datos {AÑO_FIN} ({MES_FIN:02d}) presentes: {'🟢' if has_latest else '🔴'}\n"
 
-    # Verificar contenido de contratos_202603.csv (fuente más reciente)
-    fpath_26 = os.path.join(data_dir, "processed", "contratos_202603.csv")
-    if os.path.exists(fpath_26):
-        df = pd.read_csv(fpath_26)
+    # Verificar contenido de contratos (fuente más reciente)
+    if has_latest and os.path.exists(fpath_latest):
+        df = pd.read_csv(fpath_latest)
         df.columns = df.columns.str.strip()
         for col in df.select_dtypes(include="object").columns:
             df[col] = df[col].str.strip()
+
+        col_c = "contratos" if AÑO_FIN in (2019, 2020, 2021, 2022) else "Contratos"
+        if col_c in df.columns:
+            df = df.rename(columns={col_c: "Contratos"})
 
         TC_MAP = {"Indefinido", "Temporal Tiempo Completo",
                   "Temporal Tiempo Parcial", "Conversión a Indefinido"}
         tipos_ok = TC_MAP & set(df["Tipo Contrato"].dropna().unique()) if "Tipo Contrato" in df.columns else set()
         ok = len(tipos_ok) == 4
         passed = passed and ok
-        report_md += f"- 4 tipos de contrato en 2026: {'🟢' if ok else '🔴'} ({len(tipos_ok)}/4)\n"
+        report_md += f"- 4 tipos de contrato en {AÑO_FIN}: {'🟢' if ok else '🔴'} ({len(tipos_ok)}/4)\n"
 
         edades_ok = {"Menor de 25", "Entre 25 y 44", "45 o más"} & \
                     set(df["edad"].dropna().unique()) if "edad" in df.columns else set()
         ok = len(edades_ok) == 3
         passed = passed and ok
-        report_md += f"- 3 franjas de edad en 2026: {'🟢' if ok else '🔴'} ({len(edades_ok)}/3)\n"
+        report_md += f"- 3 franjas de edad en {AÑO_FIN}: {'🟢' if ok else '🔴'} ({len(edades_ok)}/3)\n"
 
         ok = SEXOS_ESPERADOS.issubset(set(df["sexo"].dropna().unique())) if "sexo" in df.columns else False
         passed = passed and ok
-        report_md += f"- Ambos sexos en 2026: {'🟢' if ok else '🔴'}\n"
+        report_md += f"- Ambos sexos en {AÑO_FIN}: {'🟢' if ok else '🔴'}\n"
 
     return AssetCheckResult(
         passed=bool(passed),
@@ -1347,16 +1358,17 @@ def check_datos_segregacion_sectorial(context):
     passed   = True
     report_md = "### Check: segregacion_sectorial_dotplot\n\n"
 
-    fpath = get_processed_path("contratos_202512.csv")
-    if not os.path.exists(fpath):
+    cfg = get_plot_config().get("heatmap_segregacion", {})
+    AÑO = cfg.get("ano", 2025)
+    MES = cfg.get("mes", 12)
+    
+    df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
+    if df is None:
         return AssetCheckResult(
             passed=False, severity=AssetCheckSeverity.WARN,
-            metadata={"check": MetadataValue.md("🔴 contratos_202512.csv no encontrado.")})
-
-    df = pd.read_csv(fpath)
-    df.columns = df.columns.str.strip()
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = df[col].str.strip()
+            metadata={"check": MetadataValue.md(f"🔴 Archivo de contratos para {AÑO}-{MES:02d} no encontrado.")})
+            
+    df["Contratos"] = df["c"]
 
     sexos = set(df["sexo"].dropna().unique())
     ok    = {"Hombres","Mujeres"}.issubset(sexos)
@@ -1501,19 +1513,18 @@ def check_datos_brecha_temporal_edad(context):
     """
     cfg      = get_plot_config().get("brecha_temporal_edad", {})
     ISLA     = cfg.get("isla", "Todas")
+    AÑO      = cfg.get("ano", 2026)
+    MES      = cfg.get("mes", 3)
     passed   = True
     report_md = f"### Check: brecha_temporal_edad (isla={ISLA!r})\n\n"
 
-    fpath = get_processed_path("contratos_202603.csv")
-    if not os.path.exists(fpath):
+    df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
+    if df is None:
         return AssetCheckResult(
             passed=False, severity=AssetCheckSeverity.WARN,
-            metadata={"check": MetadataValue.md("🔴 contratos_202603.csv no encontrado.")})
-
-    df = pd.read_csv(fpath)
-    df.columns = df.columns.str.strip()
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = df[col].str.strip()
+            metadata={"check": MetadataValue.md(f"🔴 Archivo de contratos para {AÑO}-{MES:02d} no encontrado.")})
+            
+    df["Contratos"] = df["c"]
     df = df[df["sexo"].isin(["Hombres","Mujeres"])]
 
     if ISLA != "Todas":
@@ -1663,12 +1674,12 @@ def check_min_filas_por_panel(context, preprocesar_datos_p5: str):
                 report_md += f"  - Afectados: `{', '.join([str(i) for i in vacios.index[:5]])}`\n"
 
     # brecha_temporal_edad: ≥ 1 fila por (edad × sexo × tc)
-    fpath = get_processed_path("contratos_202603.csv")
-    if os.path.exists(fpath):
-        df = pd.read_csv(fpath)
-        df.columns = df.columns.str.strip()
-        for col in df.select_dtypes(include="object").columns:
-            df[col] = df[col].str.strip()
+    cfg  = get_plot_config().get("brecha_temporal_edad", {})
+    AÑO = cfg.get("ano", 2026)
+    MES = cfg.get("mes", 3)
+    df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
+    if df is not None:
+        df["Contratos"] = df["c"]
         TC_MAP = {"Indefinido":"Indefinido","Temporal Tiempo Completo":"Temp. Completo",
                   "Temporal Tiempo Parcial":"Temp. Parcial","Conversión a Indefinido":"Conversión"}
         df["tc"] = df["Tipo Contrato"].map(TC_MAP)
@@ -1678,7 +1689,7 @@ def check_min_filas_por_panel(context, preprocesar_datos_p5: str):
             vacios = conteo[conteo == 0]
             ok     = len(vacios) == 0
             passed = passed and ok
-            report_md += f"- `contratos_202603` paneles vacíos (suma=0): {'🟢' if ok else '⚠️'} ({len(vacios)})\n"
+            report_md += f"- Contratos {AÑO}-{MES:02d} paneles vacíos (suma=0): {'🟢' if ok else '⚠️'} ({len(vacios)})\n"
 
     return AssetCheckResult(
         passed=bool(passed),
@@ -1961,8 +1972,12 @@ def check_suficientes_anios_historico(context, preprocesar_datos_p5: str):
         if glob.glob(os.path.join(data_dir, str(año), "contratos_registrados_*.csv")):
             if año not in años_disponibles:
                 años_disponibles.append(año)
-    if os.path.exists(os.path.join(data_dir, "processed", "contratos_202603.csv")):
-        años_disponibles.append(2026)
+    cfg = get_plot_config().get("historico_tipos_contrato", {})
+    AÑO_FIN = cfg.get("ano_fin", 2026)
+    MES_FIN = cfg.get("mes_fin", 3)
+    latest_file = f"contratos_{AÑO_FIN}{MES_FIN:02d}.csv"
+    if os.path.exists(os.path.join(data_dir, "processed", latest_file)):
+        años_disponibles.append(AÑO_FIN)
 
     años_disponibles = sorted(set(años_disponibles))
     n = len(años_disponibles)

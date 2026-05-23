@@ -81,6 +81,87 @@ def get_processed_path(filename):
     return os.path.join(config.TARGET_DIR, config.DATA_P5_DIR, "processed", filename)
 
 
+def preprocess_file_if_needed(source_path: str, target_path: str) -> None:
+    if not os.path.exists(source_path):
+        return
+    # If target already exists and is newer than source, skip preprocessing
+    if os.path.exists(target_path) and os.path.getmtime(target_path) >= os.path.getmtime(source_path):
+        return
+        
+    os.makedirs(os.path.dirname(target_path), exist_ok=True)
+    
+    # Detect separator
+    with open(source_path, "r", encoding="utf-8", errors="ignore") as f:
+        l = f.readline()
+    sep = ";" if l.count(";") > l.count(",") else ","
+    
+    # Load and preprocess
+    df = pd.read_csv(source_path, sep=sep)
+    df.columns = df.columns.str.strip()
+    for col in df.select_dtypes(include=["object"]).columns:
+        try:
+            mask = df[col].notna()
+            df.loc[mask, col] = df.loc[mask, col].astype(str).str.strip()
+        except Exception:
+            pass
+        df[col] = df[col].replace(
+            r"(?i)^([^,]+),\s*(La|El|Los|Las)$", r"\2 \1", regex=True
+        )
+        df[col] = df[col].replace(r"^(-?\d+),(\d+)$", r"\1.\2", regex=True)
+        try:
+            df[col] = df[col].astype(float)
+        except ValueError:
+            pass
+    df = df.drop(columns=[c for c in df.columns if "Unnamed" in str(c)],
+                 errors="ignore")
+    df = df.dropna(how="all", axis=1)
+    df.to_csv(target_path, index=False)
+
+
+def get_processed_contratos(año: int, mes: int = None) -> list[str]:
+    source_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    processed_dir = os.path.join(source_dir, "processed")
+    os.makedirs(processed_dir, exist_ok=True)
+    
+    source_paths = []
+    
+    if año in (2019, 2020, 2021, 2022):
+        source_paths = [os.path.join(source_dir, f"contratos{año}.csv")]
+    elif mes is not None:
+        mes_str = f"{mes:02d}"
+        if año == 2023:
+            source_paths = [os.path.join(source_dir, "2023", f"contratos_registrados_2023{mes_str}.csv")]
+        elif año == 2024:
+            source_paths = [os.path.join(source_dir, "2024", f"contratos_registrados_2024{mes_str}.csv")]
+        elif año == 2025:
+            source_paths = [os.path.join(source_dir, "2025", f"contratos_2025{mes_str}.csv")]
+        elif año == 2026:
+            path_root = os.path.join(source_dir, f"contratos_2026{mes_str}.csv")
+            if os.path.exists(path_root):
+                source_paths = [path_root]
+            else:
+                source_paths = [os.path.join(source_dir, "2026", f"contratos_2026{mes_str}.csv")]
+    else:
+        # Load whole year
+        if año == 2023:
+            source_paths = sorted(glob.glob(os.path.join(source_dir, "2023", "contratos_registrados_*.csv")))
+        elif año == 2024:
+            source_paths = sorted(glob.glob(os.path.join(source_dir, "2024", "contratos_registrados_*.csv")))
+        elif año == 2025:
+            source_paths = sorted(glob.glob(os.path.join(source_dir, "2025", "contratos_202*.csv")))
+        elif año == 2026:
+            source_paths = sorted(glob.glob(os.path.join(source_dir, "contratos_202*.csv")))
+            
+    processed_paths = []
+    for sp in source_paths:
+        if os.path.exists(sp):
+            tp = os.path.join(processed_dir, os.path.basename(sp))
+            preprocess_file_if_needed(sp, tp)
+            processed_paths.append(tp)
+            
+    return processed_paths
+
+
 def get_geojson_path(filename):
     return os.path.join(config.TARGET_DIR, config.DATA_P5_DIR,
                         "cartografia-secciones", filename)
@@ -531,9 +612,16 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     """
     cfg   = get_plot_config().get("heatmap_segregacion", {})
     TOP_N = cfg.get("top_n", 15)
+    AÑO   = cfg.get("ano", 2026)
+    MES   = cfg.get("mes", 3)
 
-    df = pd.read_csv(get_processed_path("contratos_202512.csv"))
+    df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
+    if df is None:
+        context.log.warning(f"No hay datos de contratos para {AÑO}-{MES:02d}.")
+        return
+
     df.columns = df.columns.str.strip()
+    df["Contratos"] = df["c"]
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].str.strip()
 
@@ -677,8 +765,14 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0),
               fontsize=8.5, frameon=False, title="Isla", title_fontsize=8.5)
 
+    mes_names = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
+    title_date = f"{mes_names.get(MES, f'{MES:02d}')} {AÑO}"
+
     ax.set_title(
-        "Segregación de género por actividad e isla — Canarias, Marzo 2026",
+        f"Segregación de género por actividad e isla — Canarias, {title_date}",
         fontsize=12, fontweight="bold", pad=12)
     fig.text(
         0.01, 0.0,
@@ -796,15 +890,22 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     """
     pal = get_paleta()
 
-    df = pd.read_csv(get_processed_path("contratos_202603.csv"))
-    df.columns = df.columns.str.strip()
-    for col in df.select_dtypes(include="object").columns:
-        df[col] = df[col].str.strip()
-    df = df[df["sexo"].isin(["Hombres", "Mujeres"])]
-
     cfg  = get_plot_config().get("brecha_temporal_edad", {})
     ISLA = cfg.get("isla", "Todas")
     SOLO_MAYOR = cfg.get("anotar_solo_mayor", True)
+    AÑO = cfg.get("ano", 2026)
+    MES = cfg.get("mes", 3)
+
+    df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
+    if df is None:
+        context.log.warning(f"No hay datos de contratos para {AÑO}-{MES:02d}.")
+        return
+
+    df.columns = df.columns.str.strip()
+    df["Contratos"] = df["c"]
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].str.strip()
+    df = df[df["sexo"].isin(["Hombres", "Mujeres"])]
 
     if ISLA != "Todas":
         df = df[df["isla"].str.upper() == ISLA.upper()]
@@ -876,10 +977,16 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
         if ax == axes[0]:
             ax.set_ylabel("% sobre contratos del grupo edad-sexo", fontsize=10)
 
+    mes_names = {
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+    }
+    title_date = f"{mes_names.get(MES, f'{MES:02d}')} {AÑO}"
+
     titulo_loc = "Canarias" if ISLA == "Todas" else ISLA
     fig.suptitle(
         f"Distribución del tipo de contrato por edad y género — "
-        f"{titulo_loc}, Marzo 2026",
+        f"{titulo_loc}, {title_date}",
         fontsize=13, fontweight="bold")
 
     handles = [mpatches.Patch(color=c, label=s, alpha=0.85)
@@ -887,7 +994,7 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     fig.legend(handles=handles, loc="lower center", ncol=2,
                fontsize=9, frameon=False, bbox_to_anchor=(0.5, -0.04))
     fig.text(0.99, -0.07,
-             "Fuente: SEPE / OBECAN · Contratos marzo 2026",
+             f"Fuente: SEPE / OBECAN · Contratos {title_date.lower()}",
              ha="right", fontsize=8, color="#888888")
 
     plt.tight_layout(rect=[0, 0.0, 1, 0.96])
@@ -919,26 +1026,29 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
 
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
 
-    FUENTES = [
-        (2019, [os.path.join(data_dir, "contratos2019.csv")],                                  "contratos"),
-        (2020, [os.path.join(data_dir, "contratos2020.csv")],                                  "contratos"),
-        (2021, [os.path.join(data_dir, "contratos2021.csv")],                                  "contratos"),
-        (2022, [os.path.join(data_dir, "contratos2022.csv")],                                  "contratos"),
-        (2023, sorted(glob.glob(os.path.join(data_dir, "2023", "contratos_registrados_*.csv"))), "Contratos"),
-        (2024, sorted(glob.glob(os.path.join(data_dir, "2024", "contratos_registrados_*.csv"))), "Contratos"),
-        (2025, sorted(glob.glob(os.path.join(data_dir, "2025", "contratos_202*.csv"))),          "Contratos"),
-    ]
+    cfg = get_plot_config().get("historico_tipos_contrato", {})
+    AÑO_FIN = cfg.get("ano_fin", 2026)
+    MES_FIN = cfg.get("mes_fin", 3)
 
-    df26 = pd.read_csv(
-        get_processed_path("contratos_202603.csv"),
-        sep=detect_sep(get_processed_path("contratos_202603.csv")),
-        dtype={"Contratos": float})
-    df26.columns = df26.columns.str.strip()
-    df26 = df26.rename(columns={"Contratos": "c"})
-    for col in df26.select_dtypes(include="object").columns:
-        df26[col] = df26[col].str.strip()
-    df26 = df26[df26["sexo"].isin(["Hombres", "Mujeres"])]
-    df26["año"] = 2026
+    FUENTES = []
+    for año in range(2019, AÑO_FIN):
+        if año in (2019, 2020, 2021, 2022):
+            paths = [os.path.join(data_dir, f"contratos{año}.csv")]
+            col_c = "contratos"
+        else:
+            paths = sorted(glob.glob(os.path.join(data_dir, str(año), "contratos_*.csv")))
+            if año == 2025:
+                paths = sorted(glob.glob(os.path.join(data_dir, "2025", "contratos_202*.csv")))
+            col_c = "Contratos"
+        FUENTES.append((año, paths, col_c))
+
+    df_latest = _cargar_contratos(data_dir, AÑO_FIN, MES_FIN)
+    if df_latest is None:
+        context.log.warning(f"No hay datos de contratos para el último periodo {AÑO_FIN}-{MES_FIN:02d}.")
+        return
+
+    df_latest = df_latest.rename(columns={"Contratos": "c"})
+    df_latest["año"] = AÑO_FIN
 
     all_dfs = []
     for año, paths, col_c in FUENTES:
@@ -963,7 +1073,7 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
         else:
             context.log.warning(f"Ningún archivo válido para el año {año}")
 
-    all_dfs.append(df26)
+    all_dfs.append(df_latest)
     df_hist = pd.concat(all_dfs, ignore_index=True)
 
     TC_MAP = {
@@ -1014,36 +1124,19 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
                 vals = [sub.loc[a, "pct"] if a in sub.index else np.nan for a in AÑOS]
 
                 xs = [i for i, a in enumerate(AÑOS)
-                      if a <= 2025 and not np.isnan(vals[i])]
+                      if a <= (AÑO_FIN - 1) and not np.isnan(vals[i])]
                 ys = [vals[i] for i in xs]
-                ax.plot(xs, ys, color=COLORS[sexo], lw=2.2,
-                        alpha=0.9, zorder=4, solid_capstyle="round")
+                ax.plot(xs, ys, color=COLORS[sexo], lw=2.2)
 
-                for i_pt in [0, len([a for a in AÑOS if a <= 2025]) - 1]:
-                    if i_pt < len(xs) and not np.isnan(ys[i_pt]):
-                        ax.scatter(xs[i_pt], ys[i_pt], s=55,
-                                   color=COLORS[sexo], zorder=5,
-                                   edgecolors="white", linewidths=0.8)
-
-                i26 = AÑOS.index(2026) if 2026 in AÑOS else None
-                if i26 is not None and not np.isnan(vals[i26]):
-                    ax.scatter(i26, vals[i26], s=45, color=COLORS[sexo],
-                               marker="D", zorder=5, alpha=0.6,
-                               edgecolors="white", linewidths=0.8)
-
-            if 2022 in AÑOS:
-                idx_22 = AÑOS.index(2022)
-                ax.axvline(idx_22, color="#888888", lw=0.9, ls="--", zorder=2, alpha=0.7)
-                ax.text(idx_22 - 0.08, 0.95, "Ref. Laboral",
-                        transform=ax.get_xaxis_transform(),
-                        color="#666666", fontsize=7, rotation=90,
-                        ha="right", va="top", style="italic")
-
-            ax.set_title(edad, fontsize=11, fontweight="bold",
-                         pad=8, color="#333333")
+            mes_abbr = {
+                1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
+                7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"
+            }
+            ax.set_title(edad, fontsize=11, fontweight="bold", pad=8, color="#333333")
             ax.set_xticks(range(len(AÑOS)))
+            label_fin = f"{mes_abbr.get(MES_FIN, f'{MES_FIN:02d}')}\n{AÑO_FIN}"
             ax.set_xticklabels(
-                [str(a) if a != 2026 else "Mar\n2026" for a in AÑOS],
+                [str(a) if a != AÑO_FIN else label_fin for a in AÑOS],
                 fontsize=8.5, rotation=30, ha="right")
             ax.yaxis.grid(True, color="#eeeeee", lw=0.8, zorder=0)
             ax.spines[["top", "right", "bottom"]].set_visible(False)
@@ -1052,16 +1145,17 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
             ax.tick_params(axis="x", length=0)
             if col == 0:
                 ax.set_ylabel("% sobre total contratos del grupo",
-                              fontsize=9.5, color="#444444")
+                               fontsize=9.5, color="#444444")
 
         handles = [mpatches.Patch(color=COLORS[s], label=s)
                    for s in ["Hombres", "Mujeres"]]
+        legend_label_fin = f"{mes_abbr.get(MES_FIN, f'{MES_FIN:02d}')} {AÑO_FIN} (dato parcial)"
         handles += [plt.scatter([], [], marker="D", color="#aaaaaa",
-                                s=40, alpha=0.6, label="Mar 2026 (dato parcial)")]
+                                s=40, alpha=0.6, label=legend_label_fin)]
         fig.legend(handles=handles, loc="lower center", ncol=3,
                    fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.02))
 
-        fig.suptitle(f"{TC_TITLE[tc_name]} — Canarias 2019-2026",
+        fig.suptitle(f"{TC_TITLE[tc_name]} — Canarias 2019-{AÑO_FIN}",
                      fontsize=13, fontweight="bold", y=0.965)
         fig.text(0.99, 0.015, "Fuente: OBECAN / SEPE",
                  ha="right", fontsize=8, color="#888888")
@@ -1170,49 +1264,41 @@ def _islas_en_ambito(ambito: str) -> list:
         return [ambito]
 
 
-def _cargar_contratos(data_dir: str, año: int) -> pd.DataFrame | None:
+def _cargar_contratos(data_dir: str, año: int, mes: int = None) -> pd.DataFrame | None:
     """
-    Carga contratos de un año, normaliza columnas, infiere isla para
-    ficheros 2019-2022 que no la traen, y calcula grupo CNO-1.
+    Carga contratos de un año (y opcionalmente de un mes), normaliza columnas,
+    infiere isla para ficheros 2019-2022 que no la traen, y calcula grupo CNO-1.
     """
     from checks_p5 import inferir_isla
 
-    if año in (2019, 2020, 2021, 2022):
-        paths = [os.path.join(data_dir, f"contratos{año}.csv")]
-        col_c = "contratos"
-    elif año == 2026:
-        paths = [get_processed_path("contratos_202603.csv")]
-        col_c = "Contratos"
-    elif año == 2023:
-        paths = sorted(glob.glob(
-            os.path.join(data_dir, "2023", "contratos_registrados_*.csv")))
-        col_c = "Contratos"
-    elif año == 2024:
-        paths = sorted(glob.glob(
-            os.path.join(data_dir, "2024", "contratos_registrados_*.csv")))
-        col_c = "Contratos"
-    elif año == 2025:
-        paths = sorted(glob.glob(
-            os.path.join(data_dir, "2025", "contratos_202*.csv")))
-        col_c = "Contratos"
-    else:
-        return None
-
-    paths = [p for p in paths if os.path.exists(p)]
-    if not paths:
+    processed_paths = get_processed_contratos(año, mes)
+    if not processed_paths:
         return None
 
     dfs = []
-    for p in paths:
-        df = pd.read_csv(p, sep=_detect_sep(p), dtype={col_c: float})
+    for p in processed_paths:
+        with open(p, "r", encoding="utf-8", errors="ignore") as f:
+            first_line = f.readline()
+        sep = ";" if first_line.count(";") > first_line.count(",") else ","
+        df = pd.read_csv(p, sep=sep)
         df.columns = df.columns.str.strip()
-        df = df.rename(columns={col_c: "c"})
+        
+        # Determinar columna de contratos y renombrar a 'c' cleanly
+        col_c = "contratos" if año in (2019, 2020, 2021, 2022) else "Contratos"
+        if col_c in df.columns:
+            df = df.rename(columns={col_c: "c"})
+            df["c"] = df["c"].astype(float)
+            
         for col in df.select_dtypes(include="object").columns:
             df[col] = df[col].str.strip()
+            
         # Corregir artículos antes de inferir isla
         if "Municipio" in df.columns:
             df["Municipio"] = df["Municipio"].apply(_fix_articulo)
         dfs.append(df[df["sexo"].isin(["Hombres", "Mujeres"])])
+
+    if not dfs:
+        return None
 
     df_año = pd.concat(dfs, ignore_index=True)
     df_año["año"] = año
