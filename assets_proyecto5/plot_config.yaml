@@ -70,7 +70,7 @@ brecha_salarial:
   # Opciones: 
   #   "seccion"   → Muestra las secciones censales coloreadas por el valor de su municipio.
   #   "municipio" → Muestra las divisiones agrupadas de forma consolidada por municipios.
-  nivel: "seccion"
+  nivel: "municipio"
   # categoria_renta: Categoría de renta para ponderar el índice de brecha.
   # Opciones:
   #   "SUELDOS_SALARIOS"       → Sueldos y salarios (defecto)
@@ -78,6 +78,7 @@ brecha_salarial:
   #   "PRESTACIONES_DESEMPLEO" → Prestaciones por desempleo
   #   "OTRAS_PRESTACIONES"     → Otras prestaciones
   #   "OTROS_INGRESOS"         → Otros ingresos
+  # Se deja preparado, aunque SOLO tiene sentido actualmente para SUELDOS_SALARIOS
   categoria_renta: "SUELDOS_SALARIOS"
 
 brecha_temporal_edad:
