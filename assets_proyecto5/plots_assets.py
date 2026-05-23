@@ -1123,10 +1123,32 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
                            (agg["tc"] == tc_name)].set_index("año")
                 vals = [sub.loc[a, "pct"] if a in sub.index else np.nan for a in AÑOS]
 
+                # Trazar línea continua hasta el penúltimo año
                 xs = [i for i, a in enumerate(AÑOS)
                       if a <= (AÑO_FIN - 1) and not np.isnan(vals[i])]
                 ys = [vals[i] for i in xs]
                 ax.plot(xs, ys, color=COLORS[sexo], lw=2.2)
+
+                # Proyección al último año (dato parcial) con línea punteada y diamante
+                if AÑO_FIN in AÑOS and (AÑO_FIN - 1) in AÑOS:
+                    x_prev = AÑOS.index(AÑO_FIN - 1)
+                    x_curr = AÑOS.index(AÑO_FIN)
+                    y_prev = vals[x_prev]
+                    y_curr = vals[x_curr]
+                    if not np.isnan(y_prev) and not np.isnan(y_curr):
+                        # Línea discontinua de proyección
+                        ax.plot([x_prev, x_curr], [y_prev, y_curr], color=COLORS[sexo], lw=2.0, linestyle=":")
+                        # Diamante
+                        ax.scatter(x_curr, y_curr, marker="D", s=45, color=COLORS[sexo],
+                                   edgecolors="white", linewidths=0.6, zorder=5)
+
+            # Línea discontinua vertical para la Reforma Laboral en 2022
+            if 2022 in AÑOS:
+                idx_2022 = AÑOS.index(2022)
+                ax.axvline(x=idx_2022, color="#7f8c8d", linestyle="--", alpha=0.7, lw=1.2, zorder=1)
+                ax.text(idx_2022 - 0.08, 0.95, "Reforma Laboral",
+                        transform=ax.get_xaxis_transform(),
+                        rotation=90, ha="right", va="top", color="#7f8c8d", fontsize=7.5, style="italic")
 
             mes_abbr = {
                 1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
