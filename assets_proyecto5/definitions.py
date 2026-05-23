@@ -1,3 +1,4 @@
+import time
 from dagster import (
     Definitions,
     load_assets_from_modules,
@@ -174,7 +175,8 @@ def missing_plots_sensor(context: SensorEvaluationContext):
     
     # Creamos un run_key basado en la lista de archivos que faltan para no duplicar ejecuciones si ya está en curso
     missing_filenames.sort()
-    run_key = f"missing_plots_{'_'.join(missing_filenames)}"
+    timestamp = int(time.time())
+    run_key = f"missing_plots_{'_'.join(missing_filenames)}_{timestamp}"
     
     return RunRequest(
         run_key=run_key,
