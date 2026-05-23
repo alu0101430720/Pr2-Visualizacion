@@ -61,13 +61,6 @@ actividad_barras:
   #   "dodge" → agrupado (barras separadas de hombres vs mujeres lado a lado)
   modo: "fill"
 
-ocupacion_divergente:
-  # dataset: Por defecto "ocupacion-sc-3.csv"
-  dataset: "ocupacion-sc-3.csv"
-  # ano: Año específico para el gráfico. 
-  # Opciones: Cualquier año del dataset (2021, 2022, 2023). Si se comenta, agrega todos los años.
-  # ano: 2023
-
 brecha_salarial:
   # datasets origen de ocupación y renta:
   dataset_ocu: "ocupacion-sc-3.csv"
@@ -128,7 +121,7 @@ actividad_barras_canarias:
 
 ocupacion_divergente_canarias:
   # ano: Año de contratos a analizar. Opciones: 2019 a 2026.
-  ano: 2025
+  ano: 2026
   # ambito: Ámbito geográfico. Opciones: "Canarias", "SC Tenerife", "Las Palmas", "Tenerife", etc.
   ambito: "Canarias"
   # min_contratos: Contratos mínimos requeridos en una ocupación/isla para graficarse (ej. 100).
@@ -147,9 +140,9 @@ segregacion_sectorial:
   # min_contratos: Masa crítica requerida en la celda actividad-isla para calcular ratio (ej. 15).
   min_contratos: 15
   # ano / mes: Año y mes de contratos.
-  # Opciones de año: 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026
-  # Opciones de mes: 1 a 12
-  ano: 2020
+  # Opciones de año de 2019 a 2026
+  # Opciones de mes de 1 a 12
+  ano: 2026
   mes: 12
 
 historico_tipos_contrato:
