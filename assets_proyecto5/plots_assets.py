@@ -199,14 +199,9 @@ def cargar_gdf_municipios(año: int, nivel: str = "municipio",
         return gdf[["municipio", "geocode", "geometry"]].copy()
 
 
-def _calcular_indice_brecha(ocu: pd.DataFrame,
-                             dist: pd.DataFrame,
-                             categoria: str = "SUELDOS_SALARIOS") -> pd.DataFrame:
-    # Normalizar municipio a minúsculas para el join entre ocu y dist
-    ocu  = ocu.copy()
-    dist = dist.copy()
-    ocu["municipio"]  = ocu["municipio"].str.lower()
-    dist["municipio"] = dist["municipio"].str.lower()
+def _calcular_indice_brecha(ocu: pd.DataFrame) -> pd.DataFrame:
+    ocu = ocu.copy()
+    ocu["municipio"] = ocu["municipio"].str.lower()
 
     ocu_hm = (
         ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
@@ -215,17 +210,14 @@ def _calcular_indice_brecha(ocu: pd.DataFrame,
         .reset_index()
     )
     ocu_hm.columns.name = None
-    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
-
-    sal = (
-        dist[dist["MEDIDAS_CODE"] == categoria]
-        .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
-        .rename(columns={"OBS_VALUE": "pct_salarios"})
+    for col in ["Hombres", "Mujeres"]:
+        if col not in ocu_hm.columns:
+            ocu_hm[col] = 0
+    ocu_hm[["Hombres", "Mujeres"]] = ocu_hm[["Hombres", "Mujeres"]].fillna(0)
+    ocu_hm["indice_brecha"] = (
+        2 * ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"]) - 1
     )
-
-    merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
-    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
-    return merged
+    return ocu_hm[["municipio", "año", "indice_brecha"]]
 
 
 def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
@@ -247,7 +239,7 @@ def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
     )
 
     merged = ocu_hm.merge(sal, on=["seccion_key", "año"], how="inner")
-    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    merged["indice_brecha"] = (2*merged["ratio_hm"] - 1) #* merged["pct_salarios"]
     return merged
 
 
@@ -419,48 +411,54 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     """
     Bar chart horizontal: top N municipios con mayor variación absoluta
-    del índice de brecha salarial entre ano_ini y ano_fin.
+    del índice de brecha de género entre ano_ini y ano_fin.
     Ordenado por |delta| descendente. Color = dirección del cambio.
+
+    Índice = 2*H/(H+M) - 1, acotado en [-1, +1].
+    +1 = solo hombres, 0 = paridad, -1 = solo mujeres.
     """
-    cfg     = get_plot_config()["brecha_salarial"]
-    pal     = get_paleta()
-    TOP_N   = cfg.get("top_n", 5)
-    AÑO_INI = cfg.get("ano_ini", 2021)
-    AÑO_FIN = cfg.get("ano_fin", 2023)
-    UMBRAL  = cfg.get("umbral", 0.02)
-    CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
+    cfg      = get_plot_config()["brecha_salarial"]
+    TOP_N    = cfg.get("top_n", 5)
+    AÑO_INI  = cfg.get("ano_ini", 2021)
+    AÑO_FIN  = cfg.get("ano_fin", 2023)
+    UMBRAL   = cfg.get("umbral", 0.02)
 
-    ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
+    ocu = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
 
-    merged = _calcular_indice_brecha(ocu, dist, CATEGORIA)
+    merged = _calcular_indice_brecha(ocu)
 
-    ini  = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(
+    context.log.info(
+        f"Rango índice: {merged['indice_brecha'].min():.3f} "
+        f"a {merged['indice_brecha'].max():.3f}"
+    )
+
+    # ── Top N municipios con mayor variación ──────────────────────────────────
+    ini = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(
         columns={"indice_brecha": "brecha_ini"})
-    fin  = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(
+    fin = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(
         columns={"indice_brecha": "brecha_fin"})
+
     slope = ini.merge(fin, on="municipio")
-    slope["delta"]     = slope["brecha_fin"] - slope["brecha_ini"]
+    slope["delta"] = slope["brecha_fin"] - slope["brecha_ini"]
+
+    context.log.info(
+        f"Delta medio: {slope['delta'].abs().mean():.3f} · "
+        f"Delta máx: {slope['delta'].abs().max():.3f}"
+    )
+
     slope["direccion"] = slope["delta"].apply(
-        lambda d: "Brecha aumenta" if d > UMBRAL
-        else ("Brecha disminuye" if d < -UMBRAL else "Sin cambio relevante"))
+        lambda d: "Brecha aumenta"   if d >  UMBRAL
+        else ("Brecha disminuye"     if d < -UMBRAL
+        else  "Sin cambio relevante"))
 
-    # BUG FIX: usar .loc con los índices correctos, no .reindex()
     top_idx = slope["delta"].abs().nlargest(TOP_N).index
-    top = slope.loc[top_idx].sort_values("delta", key=abs, ascending=True)
-
-    # Mediana sobre TODOS los municipios (no solo el top N)
-    mediana_todos = float(merged[merged["año"].isin([AÑO_INI, AÑO_FIN])]["indice_brecha"].median())
+    top     = slope.loc[top_idx].sort_values("delta", key=abs, ascending=True)
 
     COLORES = {
         "Brecha aumenta":       "#D13111",
         "Brecha disminuye":     "#10C710",
         "Sin cambio relevante": "#AAAAAA",
     }
-
-    info_cat = CATEGORIA_MAP.get(CATEGORIA, CATEGORIA_MAP["SUELDOS_SALARIOS"])
-    nombre_completo = info_cat["nombre_completo"]
-    nombre_corto = info_cat["nombre_corto"]
 
     p = (
         ggplot(top, aes(x="reorder(municipio, delta)", y="delta", fill="direccion"))
@@ -469,10 +467,14 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         + scale_fill_manual(values=COLORES, name=None)
         + coord_flip()
         + labs(
-            title=f"Municipios con mayor cambio en {nombre_completo}",
-            subtitle=f"SC de Tenerife ({AÑO_INI}-{AÑO_FIN})",
-            x="", y=f"Cambio en índice de brecha {nombre_corto}",
-            caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
+            title="Municipios con mayor cambio en brecha de género",
+            subtitle=(
+                f"Δ índice entre {AÑO_INI} y {AÑO_FIN} · "
+                f"Top {TOP_N} por variación absoluta · "
+                f"+ = brecha aumenta  /  − = brecha disminuye"
+            ),
+            x="", y="Cambio en índice de brecha (2·H/(H+M) − 1)",
+            caption="Fuente: ISTAC · ocupacion-sc-3",
         )
         + theme_minimal()
         + theme(
@@ -489,44 +491,66 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Brecha Salarial Divergente]({out})")})
 
-
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     """
     Mapa coroplético de la brecha salarial — provincia SC Tenerife.
-    Cmap invertido: rosa = favorable a hombres, azul = favorable a mujeres.
-    Sin anotaciones de texto sobre el mapa.
+    Cmap: rosa = mayoría mujeres, azul = mayoría hombres, blanco = paridad.
+
+    Índice = 2 * H/(H+M) - 1, acotado en [-1, +1].
+    La norma se adapta al rango real de los datos calculado sobre todos
+    los años disponibles, garantizando comparabilidad inter-anual.
 
     El join entre GeoJSON y datos se hace con clave en minúsculas para
     evitar discrepancias de capitalización entre fuentes.
-    Gris #cccccc → municipio en GeoJSON sin dato en ISTAC.
+    Gris #cccccc → sección/municipio en GeoJSON sin dato en ISTAC.
     """
     cfg      = get_plot_config()["brecha_salarial"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
     NIVEL    = cfg.get("nivel", "municipio")
-    CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
 
     cmap_mapa = LinearSegmentedColormap.from_list(
         "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
     )
 
-    ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
+    ocu = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    ocu = ocu.copy()
+    ocu["municipio"] = ocu["municipio"].str.lower()
 
     if NIVEL == "seccion":
-        ocu = ocu.copy()
         ocu["seccion_key"] = ocu["geocode"].astype(str).str.split("_", n=1).str[1]
-        dist = dist.copy()
-        dist["seccion_key"] = dist["TERRITORIO_CODE"].astype(str).str.split("_", n=1).str[1]
-        merged = _calcular_indice_brecha_seccion(ocu, dist, CATEGORIA)
+        grp_cols = ["seccion_key", "año"]
     else:
-        merged = _calcular_indice_brecha(ocu, dist, CATEGORIA)
+        grp_cols = ["municipio", "año"]
 
-    lim = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(grp_cols + ["sexo"], as_index=False)["num_casos"].sum()
+        .pivot(index=grp_cols, columns="sexo", values="num_casos")
+        .reset_index()
+    )
+    ocu_hm.columns.name = None
+    for col in ["Hombres", "Mujeres"]:
+        if col not in ocu_hm.columns:
+            ocu_hm[col] = 0
+    ocu_hm[["Hombres", "Mujeres"]] = ocu_hm[["Hombres", "Mujeres"]].fillna(0)
+    ocu_hm["indice_brecha"] = (
+        2 * ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"]) - 1
+    )
+
+    # Rango calculado sobre TODOS los años para comparabilidad inter-anual
+    lim = ocu_hm["indice_brecha"].abs().max()
+    context.log.info(
+        f"Rango índice (todos los años): "
+        f"{ocu_hm['indice_brecha'].min():.3f} a {ocu_hm['indice_brecha'].max():.3f}"
+    )
+
+    ocu_hm["indice_brecha"] = ocu_hm["indice_brecha"]/lim
+
     if lim == 0:
         norm = plt.Normalize(vmin=-0.01, vmax=0.01)
     else:
-        norm = mcolors.TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
+        norm = mcolors.TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
 
     gdf_mun = cargar_gdf_municipios(AÑO_MAPA, NIVEL, context.log)
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -536,81 +560,71 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         ax.axis("off")
     else:
         if NIVEL == "seccion":
-            datos = merged[merged["año"] == AÑO_MAPA][["seccion_key", "indice_brecha"]].copy()
+            datos = ocu_hm[ocu_hm["año"] == AÑO_MAPA][
+                ["seccion_key", "indice_brecha"]].copy()
             gdf_p = gdf_mun.copy()
-            gdf_p["seccion_key"] = gdf_p["geocode"].astype(str).str.split("_", n=1).str[1]
+            gdf_p["seccion_key"] = (gdf_p["geocode"].astype(str)
+                                    .str.split("_", n=1).str[1])
             gdf_p = gdf_p.merge(
-                datos[["seccion_key", "indice_brecha"]], on="seccion_key", how="left"
+                datos[["seccion_key", "indice_brecha"]],
+                on="seccion_key", how="left"
             )
-
-            # Diagnóstico
             sin_dato = gdf_p[gdf_p["indice_brecha"].isna()]["seccion_key"].unique()
             if len(sin_dato) > 0:
                 context.log.warning(
-                    f"Secciones sin índice tras join ({len(sin_dato)}): "
-                    f"{sorted(sin_dato)}"
-                )
+                    f"Secciones sin índice ({len(sin_dato)}): {sorted(sin_dato)}")
         else:
-            datos = merged[merged["año"] == AÑO_MAPA][["municipio", "indice_brecha"]].copy()
-
-            # Join con clave en minúsculas para evitar discrepancias de capitalización
+            datos = ocu_hm[ocu_hm["año"] == AÑO_MAPA][
+                ["municipio", "indice_brecha"]].copy()
             datos["_key"] = datos["municipio"].str.lower()
             gdf_p         = gdf_mun.copy()
             gdf_p["_key"] = gdf_p["municipio"].str.lower()
-            gdf_p         = gdf_p.merge(
+            gdf_p = gdf_p.merge(
                 datos[["_key", "indice_brecha"]], on="_key", how="left"
             ).drop(columns=["_key"])
-
-            # Diagnóstico
             sin_dato = gdf_p[gdf_p["indice_brecha"].isna()]["municipio"].unique()
             if len(sin_dato) > 0:
                 context.log.warning(
-                    f"Municipios sin índice tras join ({len(sin_dato)}): "
-                    f"{sorted(sin_dato)}"
-                )
+                    f"Municipios sin índice ({len(sin_dato)}): {sorted(sin_dato)}")
 
         tiene_indice = gdf_p["indice_brecha"].notna()
 
-        # Capa 1: municipios con dato → cmap divergente
+        # Capa 1: con dato → cmap divergente
         gdf_p[tiene_indice].plot(
             column="indice_brecha", cmap=cmap_mapa,
             norm=norm, linewidth=0.15, edgecolor="white",
             legend=False, ax=ax)
 
-        # Capa 2: municipios sin dato → gris neutro
+        # Capa 2: sin dato → gris neutro
         if (~tiene_indice).any():
             gdf_p[~tiene_indice].plot(
                 color="#cccccc", linewidth=0.15, edgecolor="white", ax=ax)
-
-        ax.axis("off")
-
-        if (~tiene_indice).any():
             ax.legend(
-                handles=[mpatches.Patch(
-                    color="#cccccc",
-                    label="Sin dato en fuente")],
+                handles=[mpatches.Patch(color="#cccccc", label="Sin dato en fuente")],
                 loc="lower left", fontsize=8, frameon=False)
 
-    info_cat = CATEGORIA_MAP.get(CATEGORIA, CATEGORIA_MAP["SUELDOS_SALARIOS"])
-    nombre_completo = info_cat["nombre_completo"]
-    nombre_corto = info_cat["nombre_corto"]
+        ax.axis("off")
 
     sm = ScalarMappable(cmap=cmap_mapa, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
-    cbar.set_label(info_cat["leyenda"], fontsize=10)
-    cbar.ax.text(0.5, -0.02, "mujeres", transform=cbar.ax.transAxes,
-                 ha="center", va="top", fontsize=8, color="#D94A8C")
-    cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
-                 ha="center", va="bottom", fontsize=8, color="#4A90D9")
+    cbar.set_label("Índice de segregación de género", fontsize=10)
+    cbar.set_ticks([-1, -1 / 2, 0, 1 / 2, 1])
+    cbar.set_ticklabels([
+        f"{-1:.2f}\n(más mujeres)",
+        f"{-1/2:.2f}",
+        "0\n(paridad)",
+        f"+{1/2:.2f}",
+        f"+{1:.2f}\n(más hombres)",
+    ])
 
     nivel_label = "sección censal" if NIVEL == "seccion" else "municipio"
     fig.suptitle(
-        f"Brecha {nombre_corto} de género por {nivel_label} — SC. de Tenerife {AÑO_MAPA}",
+        f"Segregación de género por {nivel_label} — SC. de Tenerife {AÑO_MAPA}",
         fontsize=15, fontweight="bold", y=0.95)
     fig.text(
         0.5, 0.01,
-        f"Índice = ratio H/(H+M) × % {info_cat['desc']} sobre renta · Fuente: ISTAC",
+        "Índice = 2·H/(H+M) − 1  reescalado en [-1, 1]  ·  Fuente: ISTAC · ocupacion-sc-3",
         ha="center", fontsize=9, color="#666666",
         transform=fig.transFigure)
     fig.tight_layout(rect=[0, 0.04, 1, 1])
@@ -1689,6 +1703,7 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
     MES_INI = cfg.get("mes_ini", 1)
     ANO_FIN = cfg.get("ano_fin", 2026)
     MES_FIN = cfg.get("mes_fin", 3)
+    fig_h_per_row = cfg.get("fig_height_per_row", 2.8)
 
     ABREV = {
         "Producción cinematográfica, de vídeo y de programas de televisión, "
@@ -1713,7 +1728,7 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
 
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
 
-    # ── Asegurar preprocesamiento y carga de todos los meses en processed/ ───
+    # ── Cargar todos los meses disponibles ───────────────────────────────────
     for ano in range(ANO_INI, ANO_FIN + 1):
         get_processed_contratos(ano)
 
@@ -1732,7 +1747,7 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
     for fpath in ficheros:
         fname = os.path.basename(fpath)
 
-        # 1. Caso anual (ej. contratos2019.csv)
+        # Caso anual (ej. contratos2019.csv)
         m_anual = re.match(r"contratos(\d{4})\.csv", fname)
         if m_anual:
             año_fichero = int(m_anual.group(1))
@@ -1746,23 +1761,22 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
                 df.columns = df.columns.str.strip()
                 for col in df.select_dtypes(include="object").columns:
                     df[col] = df[col].str.strip()
-                
-                # Normalizar columna de contratos
-                col_c = next((c for c in df.columns if c.lower() in ("contratos", "c")), None)
+                col_c = next((c for c in df.columns
+                              if c.lower() in ("contratos", "c")), None)
                 if col_c:
                     df = df.rename(columns={col_c: "Contratos"})
-                
                 if "fecha" in df.columns:
                     df = df.dropna(subset=["fecha"])
                     df["año"] = (df["fecha"] * 10).astype(int)
-                    df["mes"] = np.round((df["fecha"] * 10 - df["año"]) * 100).astype(int)
+                    df["mes"] = np.round(
+                        (df["fecha"] * 10 - df["año"]) * 100).astype(int)
                     df = df[df["año"] == año_fichero]
                     dfs.append(df)
             except Exception as e:
                 context.log.warning(f"Error cargando {fname}: {e}")
             continue
 
-        # 2. Caso mensual (ej. contratos_202512.csv)
+        # Caso mensual (ej. contratos_202512.csv)
         m = re.search(r"(\d{4})(\d{2})", fname)
         if not m:
             continue
@@ -1779,7 +1793,8 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
                 df[col] = df[col].str.strip()
             df["año"] = año
             df["mes"] = mes
-            col_c = next((c for c in df.columns if c.lower() in ("contratos", "c")), None)
+            col_c = next((c for c in df.columns
+                          if c.lower() in ("contratos", "c")), None)
             if col_c:
                 df = df.rename(columns={col_c: "Contratos"})
             dfs.append(df)
@@ -1792,26 +1807,27 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
 
     df_all = pd.concat(dfs, ignore_index=True)
 
-    # Filtrar ámbito
     if AMBITO != "Canarias" and "isla" in df_all.columns:
         df_all = df_all[df_all["isla"].str.upper() == AMBITO.upper()]
 
     df_all = df_all[df_all["sexo"].isin(["Hombres", "Mujeres"])]
     df_all["fecha"] = pd.to_datetime(
-        df_all["año"].astype(str) + "-" + df_all["mes"].astype(str).str.zfill(2),
+        df_all["año"].astype(str) + "-" +
+        df_all["mes"].astype(str).str.zfill(2),
         format="%Y-%m"
     )
 
-    # Filtrar rango temporal exacto
     fecha_ini = pd.Timestamp(f"{ANO_INI}-{MES_INI:02d}-01")
     fecha_fin = pd.Timestamp(f"{ANO_FIN}-{MES_FIN:02d}-01")
-    df_all = df_all[(df_all["fecha"] >= fecha_ini) & (df_all["fecha"] <= fecha_fin)]
+    df_all = df_all[
+        (df_all["fecha"] >= fecha_ini) & (df_all["fecha"] <= fecha_fin)
+    ]
 
     if df_all.empty:
         context.log.warning("Sin datos tras aplicar el filtro temporal.")
         return
 
-    # ── Seleccionar top N sectores por volumen total ──────────────────────────
+    # ── Top N sectores por volumen total ─────────────────────────────────────
     top_act = (df_all.groupby("Actividad económica")["Contratos"]
                .sum().nlargest(TOP_N).index.tolist())
 
@@ -1819,7 +1835,7 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
     df_top["actividad_short"] = df_top["Actividad económica"].map(ABREV).fillna(
         df_top["Actividad económica"].str[:25])
 
-    # ── Calcular ratio H/(H+M) por sector y mes ───────────────────────────────
+    # ── Ratio H/(H+M) por sector y mes ───────────────────────────────────────
     pivot = (
         df_top.groupby(["fecha", "actividad_short", "sexo"])["Contratos"]
         .sum().unstack("sexo").reset_index()
@@ -1830,32 +1846,34 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
             pivot[col] = 0
     pivot[["Hombres", "Mujeres"]] = pivot[["Hombres", "Mujeres"]].fillna(0)
     pivot["total"] = pivot["Hombres"] + pivot["Mujeres"]
-    # Filtrar meses con masa insuficiente
+
     MIN_CONTRATOS = cfg.get("min_contratos", 30)
     pivot = pivot[pivot["total"] >= MIN_CONTRATOS].copy()
-    
+
     if pivot.empty:
-        context.log.warning("Sin datos de segregación tras aplicar el filtro de contratos mínimos.")
+        context.log.warning(
+            "Sin datos de segregación tras aplicar el filtro de contratos mínimos.")
         return
 
     pivot["ratio_hm"] = pivot["Hombres"] / pivot["total"]
 
-    # Ordenar sectores por ratio medio (más masculinizados abajo)
     orden_act = (pivot.groupby("actividad_short")["ratio_hm"]
                  .mean().sort_values(ascending=False).index.tolist())
 
-    # ── Paleta Dark2 por sector ───────────────────────────────────────────────
-    cmap = plt.get_cmap("Dark2")
-    colores = {act: mcolors.to_hex(cmap(i % 8))
+    # ── Paleta Dark2 ──────────────────────────────────────────────────────────
+    cmap_dark2 = plt.get_cmap("Dark2")
+    colores = {act: mcolors.to_hex(cmap_dark2(i % 8))
                for i, act in enumerate(orden_act)}
 
-    # ── Plot: facet por sector, una fila por sector ───────────────────────────
-    n_act  = len(orden_act)
-    ncols  = 2
-    nrows  = (n_act + 1) // ncols
-    fig, axes = plt.subplots(nrows, ncols,
-                             figsize=(14, nrows * 2.2),
-                             sharex=True, sharey=True)
+    # ── Plot ──────────────────────────────────────────────────────────────────
+    n_act     = len(orden_act)
+    ncols     = 2
+    nrows     = (n_act + 1) // ncols
+    fig, axes = plt.subplots(
+        nrows, ncols,
+        figsize=(14, nrows * fig_h_per_row),
+        sharex=True, sharey=True
+    )
     axes_flat = axes.flatten()
     fig.patch.set_facecolor("white")
 
@@ -1870,8 +1888,7 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
         ax.axhline(0.5, color="#cccccc", lw=1.2, ls="--", zorder=1)
         ax.axvline(fecha_reforma, color="#888888", lw=1.0, ls=":", zorder=2)
 
-        ax.plot(sub["fecha"], sub["ratio_hm"],
-                color=col, lw=2.0, zorder=3)
+        ax.plot(sub["fecha"], sub["ratio_hm"], color=col, lw=2.0, zorder=3)
         ax.fill_between(sub["fecha"], sub["ratio_hm"], 0.5,
                         where=sub["ratio_hm"] >= 0.5,
                         alpha=0.15, color="#4A90D9", zorder=2)
@@ -1885,24 +1902,19 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
         ax.yaxis.grid(True, color="#eeeeee", zorder=0)
         ax.spines[["top", "right"]].set_visible(False)
         ax.tick_params(axis="x", length=0)
+        ax.set_title(act, fontsize=9, fontweight="bold", color=col, pad=4)
 
-        # Título del panel con color del sector
-        ax.set_title(act, fontsize=9, fontweight="bold",
-                     color=col, pad=4)
-
-        # Anotar reforma solo en el primer panel
         if idx == 0 and sub["fecha"].min() < fecha_reforma < sub["fecha"].max():
             ax.text(fecha_reforma + pd.Timedelta(days=30), 0.92,
                     "Ref. Laboral", fontsize=7, color="#888888",
                     style="italic", va="top")
 
-    # Ocultar paneles sobrantes
     for idx in range(n_act, len(axes_flat)):
         axes_flat[idx].set_visible(False)
 
-    # Eje X compartido: etiquetas de año
+    # Etiquetas eje X solo en la última fila
     for ax in axes_flat[:n_act]:
-        if ax.get_subplotspec().is_last_row() or idx == n_act - 1:
+        if ax.get_subplotspec().is_last_row():
             ax.xaxis.set_major_formatter(
                 plt.matplotlib.dates.DateFormatter("%Y"))
             ax.xaxis.set_major_locator(
@@ -1913,8 +1925,8 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
     fig.supylabel("% hombres contratados", fontsize=10, x=0.02)
     fig.suptitle(
         f"Evolución de la segregación de género por sector — "
-        f"{AMBITO} {ANO_INI}--{ANO_FIN}",
-        fontsize=13, fontweight="bold", y=1.01)
+        f"{AMBITO} {ANO_INI}\u2013{ANO_FIN}",
+        fontsize=13, fontweight="bold", y=0.99)
     fig.text(
         0.01, -0.01,
         "Línea discontinua = paridad (50%)  ·  "
@@ -1923,8 +1935,9 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
         "Fuente: SEPE / OBECAN",
         fontsize=8, color="#666666")
 
-    plt.tight_layout(rect=[0.03, 0.02, 1, 1])
+    plt.tight_layout(rect=[0.03, 0.02, 1, 0.97])
     out = os.path.join(get_plot_dir(), "segregacion_sectorial_temporal.png")
-    fig.savefig(out, dpi=150)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Segregación temporal]({out})")})
