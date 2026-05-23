@@ -108,7 +108,7 @@ covid_prestaciones_islas:
 
 gini_evolucion_islas:
   # empezar_en_cero: true o false
-  empezar_en_cero: true
+  empezar_en_cero: false
   # top_n_islas: Número de islas con mayor Gini a destacar en la serie.
   # Opciones: 1 a 7 (si se comenta, se calcula dinámicamente desde el último año disponible).
   # top_n_islas: 3
