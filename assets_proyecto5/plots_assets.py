@@ -490,133 +490,24 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Mapa Brecha Salarial]({out})")})
 
-
-@asset(deps=[preprocesar_datos_p5], group_name="viz_desigualdad_y_renta")
-def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
-    """
-    Líneas temporales del Índice de Gini por isla.
-    Top N islas calculado dinámicamente desde el último año disponible.
-    Valor numérico anotado en el punto final de cada isla destacada.
-    """
-    cfg_plot        = get_plot_config().get("gini_evolucion_islas", {})
-    empezar_en_cero = cfg_plot.get("empezar_en_cero", False)
-    top_n_islas     = cfg_plot.get("top_n_islas", 3)
-
-    gini = _load_gini()
-    ISLAS_SET = {"Tenerife", "Gran Canaria", "La Palma", "La Gomera",
-                 "El Hierro", "Lanzarote", "Fuerteventura"}
-    df = gini[
-        (gini["MEDIDAS"] == "Índice de Gini") &
-        (gini["TERRITORIO"].isin(ISLAS_SET))
-    ].copy()
-
-    # BUG FIX: verificar que el filtro devuelve datos
-    if df.empty:
-        context.log.warning(
-            "plot_gini_evolucion_islas: sin datos tras filtrar MEDIDAS=='Índice de Gini'. "
-            "Verifica tildes o espacios en el CSV."
-        )
-        context.add_output_metadata({
-            "aviso": MetadataValue.md("⚠️ Sin datos de Gini — plot no generado.")
-        })
-        return
-
-    # TOP N calculado dinámicamente desde el último año disponible
-    ultimo_año = df["TIME_PERIOD"].max()
-    TOP_N_ISLAS = (
-        df[df["TIME_PERIOD"] == ultimo_año]
-        .nlargest(top_n_islas, "OBS_VALUE")["TERRITORIO"]
-        .tolist()
-    )
-    context.log.info(f"Top {top_n_islas} Gini en {ultimo_año}: {TOP_N_ISLAS}")
-
-    AÑOS = sorted(df["TIME_PERIOD"].unique())
-    colores = get_colores_isla()
-
-    fig, ax = plt.subplots(figsize=(13, 6))
-    fig.patch.set_facecolor("white")
-    ax.set_facecolor("white")
-
-    ax.axvspan(2019.5, 2021.5, color="#fde8e8", alpha=0.45, zorder=0)
-    ax.axvline(2020, color="#c0392b", lw=0.8, ls="--", alpha=0.5, zorder=1)
-    ax.text(2020.15, df["OBS_VALUE"].max() - 0.15,
-            "COVID-19", fontsize=8, color="#c0392b",
-            fontweight="bold", va="top")
-
-    for isla in df["TERRITORIO"].unique():
-        sub    = df[df["TERRITORIO"] == isla].sort_values("TIME_PERIOD")
-        col    = colores.get(isla, "#aaaaaa")
-        is_top = isla in TOP_N_ISLAS
-        ax.plot(sub["TIME_PERIOD"], sub["OBS_VALUE"],
-                color=col if is_top else COLOR_RESTO_ISLAS,
-                lw=2.5 if is_top else 0.8,
-                marker="o" if is_top else None,
-                markersize=5 if is_top else 0,
-                alpha=1.0 if is_top else 0.5,
-                zorder=4 if is_top else 2)
-
-        # sin etiqueta inline — el dato va en la leyenda lateral
-
-    _aplicar_eje_y(ax,
-                   y_min_data=float(df["OBS_VALUE"].min()),
-                   y_max_data=float(df["OBS_VALUE"].max() + 5),
-                   empezar_en_cero=empezar_en_cero)
-
-    ax.set_xlim(AÑOS[0] - 0.2, AÑOS[-1] + 0.5)
-    ax.set_xticks(AÑOS)
-    ax.set_xticklabels(AÑOS, fontsize=9)
-    ax.set_ylabel("Índice de Gini", fontsize=10)
-    ax.yaxis.grid(True, color="#eeeeee", zorder=0)
-    ax.spines[["top", "right"]].set_visible(False)
-
-    handles = [
-        mpatches.Patch(
-            color=colores.get(i, "#aaaaaa"),
-            label=f"{i}  ({df[df['TERRITORIO']==i].sort_values('TIME_PERIOD')['OBS_VALUE'].iloc[-1]:.1f})"
-        )
-        for i in TOP_N_ISLAS
-    ]
-    handles += [mpatches.Patch(color=COLOR_RESTO_ISLAS, alpha=0.6,
-                               label="Resto de islas")]
-    ax.legend(handles=handles, loc="center left",
-              bbox_to_anchor=(1.02, 0.5), fontsize=9,
-              frameon=False, title="Islas")
-
-    ax.set_title("Evolución del Índice de Gini por isla — Canarias 2015-2023",
-                 fontsize=13, fontweight="bold", pad=12)
-    ax.annotate(
-        f"Valores altos = mayor desigualdad  ·  "
-        f"Destacadas: top {top_n_islas} islas con mayor desigualdad en {ultimo_año}",
-        xy=(0.01, 0.98), xycoords="axes fraction",
-        fontsize=8.5, color="#555555", va="top")
-    fig.text(0.99, 0.01, "Fuente: ISTAC",
-             ha="right", fontsize=8, color="#888888")
-
-    plt.tight_layout()
-    out = os.path.join(get_plot_dir(), "gini_evolucion_islas.png")
-    fig.savefig(out, dpi=150, bbox_inches="tight")
-    plt.close(fig)
-    context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Gini Islas]({out})")})
-
-
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     """
-    Dot plot de Cleveland: ratio H/(H+M) por actividad e isla (o por municipio para una isla).
+    Dot plot de Cleveland: ratio H/(H+M) por actividad e isla (o municipio).
     Historia: ¿cómo varía la segregación de cada actividad entre islas/municipios?
 
     Gramática de gráficos:
       - Canal principal: posición en eje X común (el más preciso, Cleveland 1984)
-      - Canal secundario: color por isla (identidad, no magnitud)
-      - Facet por actividad: comparación entre islas/municipios dentro de cada panel
+      - Canal secundario: color por isla/municipio — Dark2 de ColorBrewer (≤8 entidades)
+        o color único semitransparente con jitter (>8 entidades)
       - Línea de referencia en 0.5 (paridad) como figura; puntos como fondo
 
     Gestalt:
-      - Proximidad: puntos de la misma actividad en el mismo panel
+      - Proximidad: puntos de la misma actividad alineados horizontalmente
       - Continuidad: línea de paridad guía la lectura horizontal
-      - Similitud: color por isla coherente con el resto del proyecto
-      - Figura/Fondo: línea gris clara de fondo, puntos de color en primer plano
+      - Similitud: cuando isla_cfg="Todas", los colores de isla son coherentes
+        con el resto del proyecto (get_colores_isla)
+      - Figura/Fondo: franjas alternadas y línea de paridad como fondo estructural
     """
     cfg      = get_plot_config().get("segregacion_sectorial", {})
     TOP_N    = cfg.get("top_n", 15)
@@ -637,7 +528,8 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     if isla_cfg != "Todas":
         df = df[df["isla"].str.upper() == isla_cfg.upper()]
         if df.empty:
-            context.log.warning(f"No hay datos de contratos para la isla {isla_cfg} en {AÑO}-{MES:02d}.")
+            context.log.warning(
+                f"No hay datos para la isla {isla_cfg} en {AÑO}-{MES:02d}.")
             return
 
     top_act = (df.groupby("Actividad económica")["Contratos"]
@@ -667,11 +559,15 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
         "Actividades de empleo":                                 "Activ. de empleo",
     }
 
-    # Colores por isla coherentes con el proyecto
     COLORES_ISLAS = get_colores_isla()
 
     # ── Preparar datos ────────────────────────────────────────────────────────
-    entidad_col = "Municipio" if isla_cfg != "Todas" else "isla"
+    # Detectar nombre real de la columna municipio (puede variar entre ficheros)
+    col_municipio = next(
+        (c for c in df.columns if c.lower() == "municipio"), "municipio"
+    )
+    entidad_col = col_municipio if isla_cfg != "Todas" else "isla"
+
     pivot = (
         df[df["Actividad económica"].isin(top_act)]
         .groupby(["Actividad económica", entidad_col, "sexo"])["Contratos"]
@@ -685,47 +581,67 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
             pivot[col] = 0
     pivot[["Hombres", "Mujeres"]] = pivot[["Hombres", "Mujeres"]].fillna(0)
 
-    # Filtrar combinaciones con masa insuficiente (ratio inestable)
-    MIN_CONTRATOS = cfg.get("min_contratos", 15)
+    # Umbral de masa mínima: más bajo para islas pequeñas
+    MIN_CONTRATOS = cfg.get("min_contratos", 5 if isla_cfg != "Todas" else 30)
     pivot = pivot[(pivot["Hombres"] + pivot["Mujeres"]) >= MIN_CONTRATOS].copy()
+
+    if pivot.empty:
+        context.log.warning(
+            f"Sin datos tras filtrar por MIN_CONTRATOS={MIN_CONTRATOS}.")
+        return
 
     pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
     pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV).fillna(
         pivot["Actividad económica"].str[:30])
-    
     pivot["entidad"] = pivot["entidad"].str.strip()
     if isla_cfg == "Todas":
         pivot["entidad"] = pivot["entidad"].str.title()
 
-    # Ordenar actividades por ratio medio (más feminizadas arriba,
-    # más masculinizadas abajo) — Gestalt: orden emergente sin leyenda
     orden_act = (pivot.groupby("actividad_short")["ratio_hm"]
                  .mean().sort_values(ascending=False).index.tolist())
     pivot["actividad_short"] = pd.Categorical(
         pivot["actividad_short"], categories=orden_act, ordered=True)
 
-    # Ratio medio por actividad (para la barra de referencia de fondo)
     media_act = (pivot.groupby("actividad_short")["ratio_hm"]
                  .mean().reset_index(name="media"))
 
+    unique_entities = sorted(pivot["entidad"].unique())
+    n_entities      = len(unique_entities)
+
+    # ── Paleta de colores ─────────────────────────────────────────────────────
+    if isla_cfg == "Todas":
+        # Colores del proyecto por isla, coherentes con el resto de gráficos
+        colores_mapping = {
+            ent: COLORES_ISLAS.get(ent, "#888888")
+            for ent in unique_entities
+        }
+    elif n_entities <= 8:
+        # Dark2 de ColorBrewer — 8 colores distinguibles, seguro para daltonismo
+        cmap = plt.get_cmap("Dark2")
+        colores_mapping = {
+            ent: mcolors.to_hex(cmap(i % 8))
+            for i, ent in enumerate(unique_entities)
+        }
+    else:
+        # Más de 8 municipios: color único de la isla con jitter para separar
+        color_unico    = COLORES_ISLAS.get(isla_cfg.title(), "#1B9E77")
+        colores_mapping = {ent: color_unico for ent in unique_entities}
+
     # ── Plot ──────────────────────────────────────────────────────────────────
-    n_act    = len(orden_act)
-    fig_h    = max(6, n_act * 0.55)
-    fig, ax  = plt.subplots(figsize=(10, fig_h))
+    n_act   = len(orden_act)
+    fig_h   = max(6, n_act * 0.55)
+    fig, ax = plt.subplots(figsize=(10, fig_h))
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
-    # Franjas alternadas muy suaves para guiar el ojo entre filas
-    for i, act in enumerate(orden_act):
+    for i in range(n_act):
         if i % 2 == 0:
             ax.axhspan(i - 0.45, i + 0.45, color="#f7f7f7", zorder=0)
 
-    # Línea de paridad (figura principal)
     ax.axvline(0.5, color="#bbbbbb", lw=1.8, ls="--", zorder=1)
     ax.text(0.5, -0.7, "paridad", ha="center", va="top",
             fontsize=7.5, color="#aaaaaa", style="italic")
 
-    # Segmento horizontal del rango inter-entidades por actividad (dispersión visual)
     for act in orden_act:
         sub = pivot[pivot["actividad_short"] == act]["ratio_hm"]
         if len(sub) >= 2:
@@ -733,68 +649,40 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
             ax.plot([sub.min(), sub.max()], [y, y],
                     color="#dddddd", lw=3, solid_capstyle="round", zorder=2)
 
-    unique_entities = sorted(pivot["entidad"].unique())
-    n_entities = len(unique_entities)
-
-    if n_entities > 9:
-        # Teñir todos del mismo color (usar color de la isla o verde por defecto)
-        color_unico = COLORES_ISLAS.get(isla_cfg, "#1B9E77") if isla_cfg != "Todas" else "#1B9E77"
-        colores_mapping = {ent: color_unico for ent in unique_entities}
-    else:
-        # Usar una paleta de brewer (Set1)
-        cmap = plt.get_cmap("Dark2")
-        colores_mapping = {
-            ent: mcolors.to_hex(cmap(i % 9))
-            for i, ent in enumerate(unique_entities)
-        }
-
-    # Puntos por entidad (isla o municipio)
-    if n_entities > 9:
+    if n_entities > 8 and isla_cfg != "Todas":
+        # Jitter aleatorio determinista para evitar superposición
         np.random.seed(42)
-        # Determinamos las posiciones Y base
-        ys_base = np.array([orden_act.index(a) for a in pivot["actividad_short"]])
-        # Añadimos un jitter aleatorio determinista
+        ys_base     = np.array([orden_act.index(a) for a in pivot["actividad_short"]])
         ys_jittered = ys_base + np.random.uniform(-0.15, 0.15, size=len(pivot))
-        
-        # Color list based on mapping (all same color)
-        color_list = [colores_mapping[ent] for ent in pivot["entidad"]]
+        color_list  = [colores_mapping[ent] for ent in pivot["entidad"]]
         ax.scatter(pivot["ratio_hm"], ys_jittered,
                    c=color_list, s=65, zorder=4,
-                   edgecolors="white", linewidths=0.5,
-                   alpha=0.8,
-                   label=f"Municipios de {isla_cfg}" if isla_cfg != "Todas" else f"Entidades ({n_entities})")
+                   edgecolors="white", linewidths=0.5, alpha=0.8,
+                   label=f"Municipios de {isla_cfg}")
     else:
-        # get dynamic jitter per entity
-        def get_entity_jitter(ent_name):
-            try:
-                idx = unique_entities.index(ent_name)
-                # Distribuye uniformemente de -0.1 a 0.1
-                if n_entities > 1:
-                    return -0.1 + idx * (0.2 / (n_entities - 1))
-                return 0.0
-            except ValueError:
-                return 0.0
+        # Jitter determinista proporcional al índice de la entidad
+        def get_jitter(ent_name):
+            idx = unique_entities.index(ent_name)
+            return (-0.1 + idx * (0.2 / (n_entities - 1))
+                    if n_entities > 1 else 0.0)
 
-        # Puntos por entidad individual
         for ent in unique_entities:
             sub = pivot[pivot["entidad"] == ent].copy()
             if sub.empty:
                 continue
-            color = colores_mapping[ent]
-            jitter = get_entity_jitter(ent)
-            ys = [orden_act.index(a) + jitter for a in sub["actividad_short"]]
+            color  = colores_mapping[ent]
+            jitter = get_jitter(ent)
+            ys     = [orden_act.index(a) + jitter for a in sub["actividad_short"]]
             ax.scatter(sub["ratio_hm"], ys,
                        color=color, s=70, zorder=4,
                        edgecolors="white", linewidths=0.6,
-                       alpha=0.85,
-                       label=ent)
+                       alpha=0.85, label=ent)
 
-    # Punto de media por actividad (triángulo negro) como referencia agregada
+    # Diamante negro = media por actividad
     for act in orden_act:
         row = media_act[media_act["actividad_short"] == act]
         if not row.empty:
-            y = orden_act.index(act)
-            ax.scatter(row["media"].values[0], y,
+            ax.scatter(row["media"].values[0], orden_act.index(act),
                        marker="D", s=30, color="#333333",
                        zorder=5, edgecolors="white", linewidths=0.5)
 
@@ -803,7 +691,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     ax.set_yticklabels(orden_act, fontsize=9.5)
     ax.set_xlim(0.0, 1.0)
     ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
-    ax.set_xticklabels(["0%", "25%", "50%", "75%", "100%"],
+    ax.set_xticklabels(["0%", "25%", "50%\n(paridad)", "75%", "100%"],
                        fontsize=8.5)
     ax.set_xlabel("% hombres contratados", fontsize=10)
     ax.xaxis.grid(True, color="#eeeeee", zorder=0)
@@ -811,27 +699,41 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     ax.spines["bottom"].set_color("#dddddd")
     ax.tick_params(axis="y", length=0)
 
-    # Leyenda entidad + símbolo de media
+    # Leyenda
     handles, labels = ax.get_legend_handles_labels()
-    media_label = f"Media {isla_cfg}" if isla_cfg != "Todas" else "Media Canarias"
+    media_label  = f"Media {isla_cfg}" if isla_cfg != "Todas" else "Media Canarias"
     media_handle = plt.scatter([], [], marker="D", s=30, color="#333333",
                                label=media_label)
     handles.append(media_handle)
+    legend_title = ("Isla" if isla_cfg == "Todas"
+                    else "Municipio" if n_entities <= 8
+                    else f"Municipios de {isla_cfg}")
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0),
-              fontsize=8.5, frameon=False, title="Entidad" if n_entities > 9 or isla_cfg != "Todas" else "Isla", title_fontsize=8.5)
+              fontsize=8.5, frameon=False,
+              title=legend_title, title_fontsize=8.5)
 
+    # Título y pie
     mes_names = {
-        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
-        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre",
     }
     title_date = f"{mes_names.get(MES, f'{MES:02d}')} {AÑO}"
 
     if isla_cfg != "Todas":
-        title_text = f"Segregación de género por actividad en municipios de {isla_cfg} — {title_date}"
-        caption_text = f"◆ = media {isla_cfg}  ·  barra gris = rango entre municipios  ·  Fuente: SEPE / OBECAN"
+        title_text   = (f"Segregación de género por actividad en "
+                        f"municipios de {isla_cfg} — {title_date}")
+        caption_text = (f"◆ = media {isla_cfg}  ·  "
+                        f"barra gris = rango entre municipios  ·  "
+                        f"Fuente: SEPE / OBECAN  ·  "
+                        f"n ≥ {MIN_CONTRATOS} contratos por celda")
     else:
-        title_text = f"Segregación de género por actividad e isla — Canarias, {title_date}"
-        caption_text = "◆ = media Canarias  ·  barra gris = rango entre islas  ·  Fuente: SEPE / OBECAN"
+        title_text   = (f"Segregación de género por actividad e isla — "
+                        f"Canarias, {title_date}")
+        caption_text = (f"◆ = media Canarias  ·  barra gris = rango entre islas  ·  "
+                        f"Paleta Dark2 (ColorBrewer)  ·  "
+                        f"Fuente: SEPE / OBECAN  ·  "
+                        f"n ≥ {MIN_CONTRATOS} contratos por celda")
 
     ax.set_title(title_text, fontsize=12, fontweight="bold", pad=12)
     fig.text(0.01, 0.0, caption_text, fontsize=8, color="#666666")
@@ -842,7 +744,6 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Segregación dot plot]({out})")})
-
 # ── COVID helpers ─────────────────────────────────────────────────────────────
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_desigualdad_y_renta")
