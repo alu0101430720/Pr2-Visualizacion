@@ -151,10 +151,10 @@ Este documento describe detalladamente la base teórica y técnica de cada una d
 
 #### `check_datos_segregacion_sectorial` (Cleveland Dot Plot)
 *   **Gestalt**:
-    *   *Similitud*: Colores consistentes y unificados por isla a través de la visualización.
-    *   *Proximidad*: Puntos de la misma actividad económica contenidos exactamente en el mismo panel horizontal guiando la lectura.
-    *   *Cierre*: Exclusión de celdas con menos de 30 contratos para evitar ratios de segregación inestables que desvirtúen la escala visual.
-*   **Gramática de Gráficos**: *Canal de Posición X*. Emplea el canal visual más preciso para comparaciones de proporciones (posición en eje común, Cleveland 1984) mapeando el porcentaje de hombres y controlando la dispersión mediante geometrías lineales (`geom_segment` o similar).
+    *   *Similitud*: Si hay 9 o menos puntos, se utiliza una paleta de ColorBrewer cualitativa (`Dark2` o similar) para que el cerebro asocie fácilmente cada color a una entidad distinta sin ambigüedad. Si hay más de 9 puntos (p. ej., municipios de una isla), colorear cada uno con tonos diferentes rompería la ley de similitud y saturaría la capacidad del ojo para agrupar visualmente (saturación cognitiva). En ese caso, el check avisa (emite un WARN) y el gráfico tiñe todos los puntos de un color homogéneo.
+    *   *Proximidad*: Puntos de la misma actividad económica contenidos en la misma fila horizontal guiando la lectura.
+    *   *Cierre / Masa*: Exclusión de celdas con baja cantidad de contratos para evitar ratios de segregación inestables que desvirtúen la escala visual.
+*   **Gramática de Gráficos**: *Escalas / Canales de Color*. Controla el mapeo del canal visual del color a la variable categórica `entidad`. Si `n_entidades <= 9`, se realiza un mapeo discreto mediante una escala cualitativa de ColorBrewer (`Dark2`). Si excede de 9, la escala colapsa a un valor cromático constante (color canónico de la isla o verde por defecto), impidiendo la saturación visual y el desbordamiento de la leyenda. Mapea la posición en el eje común X para una comparación óptima (Cleveland 1984).
 
 #### `check_datos_covid_sueldos` & `check_datos_covid_prestaciones`
 *   **Gestalt**: *Continuidad y Figura/Fondo*. Verifican la presencia de los años críticos de la pandemia (2020) y la validez de los sueldos en esos periodos para que las áreas de sombreado especial en color gris (anotaciones de fondo) encajen con la caída del dato (figura en primer plano).
