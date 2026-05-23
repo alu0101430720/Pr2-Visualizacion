@@ -143,13 +143,13 @@ ISLAS_ORDEN = [
 ]
 
 COLORES_ISLA = {
-    "Tenerife":      "#2B5C8F",
-    "Gran Canaria":  "#3E9B8D",
-    "Lanzarote":     "#D65A31",
-    "Fuerteventura": "#E29734",
-    "La Palma":      "#4F8A3F",
-    "La Gomera":     "#A262A8",
-    "El Hierro":     "#8C7864",
+    "Tenerife":      "#1B9E77",
+    "Gran Canaria":  "#D95F02",
+    "Lanzarote":     "#7570B3",
+    "Fuerteventura": "#E7298A",
+    "La Palma":      "#66A61E",
+    "La Gomera":     "#E6AB02",
+    "El Hierro":     "#A6761D",
 }
 
 COLOR_RESTO_ISLAS = "#b0bec5"
