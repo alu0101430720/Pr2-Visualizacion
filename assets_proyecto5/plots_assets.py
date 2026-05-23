@@ -182,7 +182,7 @@ def fmt_k(l):
     return [_f(v) for v in l]
 
 
-def cargar_gdf_municipios(año: int, logger=None) -> gpd.GeoDataFrame | None:
+def cargar_gdf_municipios(año: int, nivel: str = "municipio", logger=None) -> gpd.GeoDataFrame | None:
     geojson_name = f"secciones_{año}0101_tenerife.json"
     path = get_geojson_path(geojson_name)
     if not os.path.exists(path):
@@ -191,6 +191,8 @@ def cargar_gdf_municipios(año: int, logger=None) -> gpd.GeoDataFrame | None:
         return None
     gdf = gpd.read_file(path).set_crs("EPSG:4326", allow_override=True)
     gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
+    if nivel == "seccion":
+        return gdf[["municipio", "geometry"]]
     return gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
 
 
@@ -441,8 +443,9 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     else:
         norm = mcolors.TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
 
-    gdf_mun = cargar_gdf_municipios(AÑO_MAPA, context.log)
-    fig, ax = plt.subplots(figsize=(12, 8))
+    NIVEL    = cfg.get("nivel", "municipio")  # municipio | seccion
+    gdf_mun  = cargar_gdf_municipios(AÑO_MAPA, NIVEL, context.log)
+    fig, ax  = plt.subplots(figsize=(12, 8))
 
     if gdf_mun is None:
         ax.set_title(f"{AÑO_MAPA} - Sin Datos Espaciales")

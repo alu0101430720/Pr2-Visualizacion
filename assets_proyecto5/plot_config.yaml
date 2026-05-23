@@ -77,6 +77,11 @@ brecha_salarial:
   umbral: 0.02
   # n_anotaciones_mapa: Municipios en extremos opuestos a etiquetar con texto en el mapa (ej. 3, 5).
   n_anotaciones_mapa: 3
+  # nivel: Nivel espacial de detalle a dibujar en el mapa coroplético.
+  # Opciones: 
+  #   "seccion"   → (Enfoque A) Muestra las secciones censales coloreadas por el valor de su municipio.
+  #   "municipio" → Muestra las divisiones agrupadas de forma consolidada por municipios.
+  nivel: "seccion"
 
 brecha_temporal_edad:
   # isla: Isla para el gráfico de brecha temporal.
