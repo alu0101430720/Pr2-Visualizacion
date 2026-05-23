@@ -88,7 +88,7 @@ brecha_temporal_edad:
   # ano / mes: Año y mes de contratos de la provincia.
   # Opciones de año: 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026
   # Opciones de mes: 1 a 12 (si se comenta o es null, carga el año completo)
-  ano: 2026
+  ano: 2021
   mes: 3
 
 # ── Control eje Y: true = empieza en 0 / false = truncado para acentuar fluctuaciones ──
@@ -123,7 +123,7 @@ ocupacion_divergente_canarias:
   # ano: Año de contratos a analizar. Opciones: 2019 a 2026.
   ano: 2026
   # ambito: Ámbito geográfico. Opciones: "Canarias", "SC Tenerife", "Las Palmas", "Tenerife", etc.
-  ambito: "Canarias"
+  ambito: "SC Tenerife"
   # min_contratos: Contratos mínimos requeridos en una ocupación/isla para graficarse (ej. 100).
   min_contratos: 100
   # agregar_islas: Composición espacial.
@@ -143,7 +143,7 @@ segregacion_sectorial:
   # Opciones de año de 2019 a 2026
   # Opciones de mes de 1 a 12
   ano: 2026
-  mes: 12
+  mes: 3
 
 historico_tipos_contrato:
   # ano_fin: Año de finalización de la serie temporal. Opciones: 2019 a 2026.
