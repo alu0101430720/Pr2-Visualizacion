@@ -1146,7 +1146,7 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
             if 2022 in AÑOS:
                 idx_2022 = AÑOS.index(2022)
                 ax.axvline(x=idx_2022, color="#7f8c8d", linestyle="--", alpha=0.7, lw=1.2, zorder=1)
-                ax.text(idx_2022 - 0.08, 0.95, "Reforma Laboral",
+                ax.text(idx_2022 - 0.08, 0.95, "Ref. Laboral",
                         transform=ax.get_xaxis_transform(),
                         rotation=90, ha="right", va="top", color="#7f8c8d", fontsize=7.5, style="italic")
 
