@@ -328,10 +328,10 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             legend_position="bottom",
         )
     )
-    out = os.path.join(get_plot_dir(), "brecha_salarial_divergente.png")
+    out = os.path.join(get_plot_dir(), "brecha_salarial_lollipop.png")
     p.save(out, width=10, height=5, dpi=150, verbose=False)
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Brecha Salarial Divergente]({out})")})
+        {"plot": MetadataValue.md(f"![Brecha Salarial Lollipop]({out})")})
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
@@ -692,6 +692,159 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Segregación dot plot]({out})")})
+
+
+@asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
+def plot_heatmap_segregacion_sectorial(context: AssetExecutionContext) -> None:
+    """
+    IDONEIDAD: dos variables categóricas (actividad × isla) con una cuantitativa
+    continua en la celda (ratio H/M). El heatmap es más eficiente en espacio
+    que 84 barras agrupadas y permite detectar patrones de segregación
+    consistentes entre islas de un solo vistazo.
+
+    GESTALT:
+      Similitud   — gradiente RdBu_r centrado en 0.5 (paridad): rojo = mayoría
+                    hombres, azul = mayoría mujeres, blanco = equilibrio.
+      Proximidad  — actividades ordenadas de más feminizadas (arriba) a más
+                    masculinizadas (abajo): los clusters emergen sin intervención.
+      Continuidad — lectura izq→der = islas occidentales → orientales, permite
+                    detectar si la segregación es local o estructural.
+      Cierre      — bordes blancos entre celdas definen cada unidad sin sobrecargar.
+
+    DISEÑO:
+      TwoSlopeNorm centrada en 0.5 (paridad real, no media del dataset).
+      Anotación %H / %M dentro de cada celda: elimina la necesidad de leer
+      la barra de color para valores concretos.
+      Color de texto adaptativo: blanco en celdas extremas, gris en celdas
+      próximas a la paridad (ratio tinta/legibilidad óptimo).
+      Sin ejes de título (las etiquetas de fila/columna son autoexplicativas).
+      Islas ordenadas oeste→este para coherencia geográfica con los mapas.
+    """
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import matplotlib.colors as mcolors
+    from matplotlib.cm import ScalarMappable
+
+    # ── Carga y limpieza ──────────────────────────────────────────────────────
+    df = pd.read_csv(get_processed_path("contratos_202603.csv"))
+    df.columns = df.columns.str.strip()
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].str.strip()
+
+    # ── Top 12 actividades por volumen total ──────────────────────────────────
+    top_act = (
+        df.groupby("Actividad económica")["Contratos"]
+        .sum().nlargest(12).index.tolist()
+    )
+
+    ABREV = {
+        "Producción cinematográfica, de vídeo y de programas de televisión, grabación de sonido y edición musical": "Producción audiovisual",
+        "Servicios a edificios y actividades de jardinería": "Servicios a edificios",
+        "Actividades de construcción especializada":         "Construcción especializada",
+        "Administración pública y defensa; seguridad social obligatoria": "Administración pública",
+        "Actividades de creación artística y artes escénicas": "Artes escénicas",
+        "Actividades sanitarias":      "Actividades sanitarias",
+        "Servicios de alojamiento":    "Alojamiento",
+        "Servicios de comidas y bebidas": "Hostelería",
+        "Comercio al por menor":       "Comercio minorista",
+        "Comercio al por mayor":       "Comercio mayorista",
+        "Educación":                   "Educación",
+        "Construcción de edificios":   "Construcción de edificios",
+    }
+
+    # ── Ratio H/(H+M) por actividad e isla ───────────────────────────────────
+    pivot = (
+        df[df["Actividad económica"].isin(top_act)]
+        .groupby(["Actividad económica", "isla", "sexo"])["Contratos"]
+        .sum().unstack("sexo").reset_index()
+    )
+    pivot.columns.name = None
+    pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
+    pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV)
+
+    # ── Orden islas oeste→este ────────────────────────────────────────────────
+    ISLAS_ORDEN = ["EL HIERRO", "LA GOMERA", "LA PALMA", "TENERIFE",
+                   "GRAN CANARIA", "LANZAROTE", "FUERTEVENTURA"]
+    ISLAS_LABEL = ["El Hierro", "La Gomera", "La Palma", "Tenerife",
+                   "Gran Canaria", "Lanzarote", "Fuerteventura"]
+
+    # ── Orden actividades: más feminizadas arriba ─────────────────────────────
+    orden_act = (
+        pivot.groupby("actividad_short")["ratio_hm"]
+        .mean().sort_values(ascending=True).index.tolist()
+    )
+
+    heat = (
+        pivot.pivot(index="actividad_short", columns="isla", values="ratio_hm")
+        .reindex(index=orden_act, columns=ISLAS_ORDEN)
+    )
+
+    # ── Plot ──────────────────────────────────────────────────────────────────
+    fig, ax = plt.subplots(figsize=(13, 7))
+
+    norm = mcolors.TwoSlopeNorm(vmin=0.0, vcenter=0.5, vmax=1.0)
+    cmap = plt.cm.RdBu_r
+    ax.imshow(heat.values, cmap=cmap, norm=norm, aspect="auto")
+
+    # Ejes
+    ax.set_xticks(range(len(ISLAS_ORDEN)))
+    ax.set_xticklabels(ISLAS_LABEL, fontsize=11, fontweight="bold")
+    ax.set_yticks(range(len(orden_act)))
+    ax.set_yticklabels(orden_act, fontsize=10)
+    ax.tick_params(left=False, bottom=False)
+    ax.set_xlabel(None)
+    ax.set_ylabel(None)
+
+    # Anotaciones %H / %M en cada celda
+    for i in range(len(orden_act)):
+        for j in range(len(ISLAS_ORDEN)):
+            val = heat.values[i, j]
+            if not np.isnan(val):
+                pct_h = int(round(val * 100))
+                pct_m = 100 - pct_h
+                color_txt = "white" if abs(val - 0.5) > 0.25 else "#333333"
+                ax.text(j, i, f"{pct_h}H\n{pct_m}M",
+                        ha="center", va="center",
+                        fontsize=7.5, fontweight="bold", color=color_txt)
+
+    # Bordes blancos entre celdas
+    for i in range(len(orden_act) + 1):
+        ax.axhline(i - 0.5, color="white", lw=1.5)
+    for j in range(len(ISLAS_ORDEN) + 1):
+        ax.axvline(j - 0.5, color="white", lw=1.5)
+
+    ax.set_xlim(-0.5, len(ISLAS_ORDEN) - 0.5)
+    ax.set_ylim(-0.5, len(orden_act) - 0.5)
+
+    # Colorbar
+    cb = fig.colorbar(
+        ScalarMappable(norm=norm, cmap=cmap),
+        ax=ax, orientation="vertical", shrink=0.7, pad=0.02,
+    )
+    cb.set_label("% Hombres contratados", fontsize=9)
+    cb.set_ticks([0, 0.25, 0.5, 0.75, 1.0])
+    cb.set_ticklabels([
+        "0%\n(todo mujeres)", "25%", "50%\n(paridad)", "75%", "100%\n(todo hombres)"
+    ])
+
+    # Títulos
+    ax.set_title(
+        "Segregación de género por sector e isla — Canarias, Marzo 2026",
+        fontsize=14, fontweight="bold", pad=14,
+    )
+    fig.text(
+        0.01, -0.02,
+        "Azul = mayoría mujeres · Rojo = mayoría hombres · Blanco = paridad  ·  Fuente: SEPE / ISTAC",
+        fontsize=8, color="#666666",
+    )
+
+    plt.tight_layout()
+    out = os.path.join(get_plot_dir(), "heatmap_segregacion_sectorial.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Heatmap Segregación]({out})")}
+    )
 
 # ── COVID helpers ─────────────────────────────────────────────────────────────
 
@@ -1054,6 +1207,7 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
         plt.tight_layout(rect=[0, 0.08, 1, 1])
 
         safe = tc_name.lower().replace(". ", "_").replace(" ", "_")
+        safe = "".join(c for c in unicodedata.normalize("NFD", safe) if unicodedata.category(c) != "Mn")
         out  = os.path.join(get_plot_dir(), f"historico_{safe}.png")
         fig.savefig(out, dpi=150, bbox_inches="tight")
         plt.close(fig)

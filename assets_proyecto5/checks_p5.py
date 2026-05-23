@@ -20,6 +20,7 @@ from plots_assets import (
     get_plot_dir,
     plot_gini_evolucion_islas,
     plot_segregacion_sectorial,
+    plot_heatmap_segregacion_sectorial,
     plot_covid_sueldos_islas,
     plot_covid_prestaciones_islas,
     plot_brecha_temporal_edad,
@@ -141,14 +142,19 @@ MAX_CHARS_ANOTACION_MAPA = 20  # nombre de municipio anotado sobre el mapa
 # Nombres canónicos de los PNG que deben existir tras la ejecución
 PNG_ESPERADOS = [
     "actividad_barras.png",
-    "brecha_salarial_lollipop.png",       # era slope, ahora lollipop
+    "brecha_salarial_lollipop.png",
     "mapa_brecha_salarial.png",
     "gini_evolucion_islas.png",
     "segregacion_sectorial_dotplot.png",
+    "heatmap_segregacion_sectorial.png",
     "covid_sueldos_islas.png",
     "covid_prestaciones_islas.png",
     "brecha_temporal_parcial_edad.png",
-    "historico_tipos_contrato_2x2.png",   # era 4 ficheros, ahora small multiple único
+    "historico_indefinido.png",
+    "historico_temp_completo.png",
+    "historico_temp_parcial.png",
+    "historico_conversion.png",
+    "ocupacion_divergente_canarias.png",
 ]
 
 # Añadir el mapa de distribución de renta dinámicamente (depende de cfg)
@@ -1387,6 +1393,66 @@ def check_datos_segregacion_sectorial(context):
     ok = celdas_validas >= 5
     passed = passed and ok
     report_md += f"- Celdas con masa suficiente (n ≥ {MIN_C}): {'🟢' if ok else '🔴'} ({celdas_validas} celdas)\n"
+
+    return AssetCheckResult(
+        passed=bool(passed), severity=AssetCheckSeverity.WARN,
+        metadata={"check": MetadataValue.md(report_md)})
+
+
+@asset_check(
+    asset=plot_heatmap_segregacion_sectorial,
+    description=(
+        "Verifica que contratos_202603.csv tiene las 7 islas, ambos sexos, "
+        "y actividades con volumen para el heatmap."
+    ),
+)
+def check_datos_heatmap_segregacion(context):
+    """
+    Gestalt — Similitud: TwoSlopeNorm requiere valores a ambos lados de la paridad
+    para que la escala de color RdBu_r sea legible y coherente visualmente.
+    Gestalt — Cierre: Verifica que se cuenta con las 7 islas completas para evitar
+    un mapa/heatmap con celdas faltantes que rompan la continuidad visual.
+    """
+    passed   = True
+    report_md = "### Check: heatmap_segregacion_sectorial\n\n"
+
+    fpath = get_processed_path("contratos_202603.csv")
+    if not os.path.exists(fpath):
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md("🔴 contratos_202603.csv no encontrado.")})
+
+    df = pd.read_csv(fpath)
+    df.columns = df.columns.str.strip()
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].str.strip()
+
+    sexos = set(df["sexo"].dropna().unique())
+    ok    = {"Hombres","Mujeres"}.issubset(sexos)
+    passed = passed and ok
+    report_md += f"- Ambos sexos: {'🟢' if ok else '🔴'}\n"
+
+    ISLAS_ESPERADAS = {"EL HIERRO","LA GOMERA","LA PALMA","TENERIFE",
+                       "GRAN CANARIA","LANZAROTE","FUERTEVENTURA"}
+    islas_datos = set(df["isla"].dropna().str.upper().unique())
+    faltantes   = ISLAS_ESPERADAS - islas_datos
+    ok = len(faltantes) == 0
+    passed = passed and ok
+    report_md += f"- 7 islas presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
+
+    top_act = (df.groupby("Actividad económica")["Contratos"]
+               .sum().nlargest(12).index.tolist())
+    
+    pivot = (df[df["Actividad económica"].isin(top_act)]
+             .groupby(["Actividad económica","isla","sexo"])["Contratos"]
+             .sum().unstack("sexo").fillna(0))
+             
+    pivot["ratio"] = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
+    
+    # Comprobar que hay valores por encima y por debajo de 0.5 (paridad)
+    ok_ratios = bool((pivot["ratio"] > 0.5).any()) and bool((pivot["ratio"] < 0.5).any())
+    passed = passed and ok_ratios
+    report_md += f"- Ratios por encima y debajo de la paridad (TwoSlopeNorm viable): {'🟢' if ok_ratios else '🔴'}\n"
 
     return AssetCheckResult(
         passed=bool(passed), severity=AssetCheckSeverity.WARN,
