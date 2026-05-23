@@ -75,10 +75,10 @@ brecha_salarial:
   # top_n: Cantidad de municipios con mayor cambio absoluto en la brecha a mostrar (ej. 5, 10).
   top_n: 5
   # ano_ini / ano_fin: Periodo de comparación temporal del índice de brecha.
-  # Opciones: Años entre 2015 y 2023.
+  # Opciones: Años entre 2021 y 2023.
   ano_ini: 2021
   ano_fin: 2023
-  # ano_mapa: Año a renderizar en el mapa coroplético de brecha. Opciones: 2015 a 2023.
+  # ano_mapa: Año a renderizar en el mapa coroplético de brecha. Opciones: 2021 a 2023.
   ano_mapa: 2023
   # umbral: Variación del índice bajo la cual el cambio se considera neutro (gris). Por defecto 0.02.
   umbral: 0.02
@@ -149,7 +149,7 @@ segregacion_sectorial:
   # ano / mes: Año y mes de contratos.
   # Opciones de año: 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026
   # Opciones de mes: 1 a 12
-  ano: 2025
+  ano: 2020
   mes: 12
 
 historico_tipos_contrato:
