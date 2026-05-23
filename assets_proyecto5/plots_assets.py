@@ -265,7 +265,7 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     """
-    Lollipop chart horizontal: top N municipios con mayor variación absoluta
+    Bar chart horizontal: top N municipios con mayor variación absoluta
     del índice de brecha salarial entre ano_ini y ano_fin.
     Ordenado por |delta| descendente. Color = dirección del cambio.
     """
@@ -328,10 +328,10 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
             legend_position="bottom",
         )
     )
-    out = os.path.join(get_plot_dir(), "brecha_salarial_lollipop.png")
+    out = os.path.join(get_plot_dir(), "brecha_salarial_divergente.png")
     p.save(out, width=10, height=5, dpi=150, verbose=False)
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Brecha Salarial Lollipop]({out})")})
+        {"plot": MetadataValue.md(f"![Brecha Salarial Divergente]({out})")})
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
