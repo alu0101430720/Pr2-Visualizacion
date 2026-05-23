@@ -84,7 +84,7 @@ brecha_salarial:
 brecha_temporal_edad:
   # isla: Isla para el gráfico de brecha temporal.
   # Opciones: "Todas", "Tenerife", "Gran Canaria", "La Palma", "Lanzarote", "Fuerteventura", "La Gomera", "El Hierro"
-  isla: "Todas"
+  isla: "Tenerife"
   # anotar: Mostrar etiquetas de porcentaje sobre las barras. Opciones: true, false
   anotar: false
   # anotar_solo_mayor: Mostrar etiquetas de texto.
