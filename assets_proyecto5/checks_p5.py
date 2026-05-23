@@ -178,8 +178,10 @@ def _indice_brecha(cfg: dict) -> pd.DataFrame:
         .unstack("sexo").reset_index()
     )
     ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+    
+    CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
     sal = (
-        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        dist[dist["MEDIDAS_CODE"] == CATEGORIA]
         .groupby(["municipio", "año"])["OBS_VALUE"].median()
         .reset_index()
     )
@@ -907,8 +909,9 @@ def check_datos_mapa_brecha(context):
         ocu["seccion_key"] = ocu["geocode"].astype(str).str.split("_", n=1).str[1]
         dist["seccion_key"] = dist["TERRITORIO_CODE"].astype(str).str.split("_", n=1).str[1]
         
+        CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
         from plots_assets import _calcular_indice_brecha_seccion
-        merged = _calcular_indice_brecha_seccion(ocu, dist)
+        merged = _calcular_indice_brecha_seccion(ocu, dist, CATEGORIA)
         idx_col = "indice_brecha"
     else:
         merged  = _indice_brecha(cfg)

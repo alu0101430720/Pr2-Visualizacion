@@ -200,7 +200,8 @@ def cargar_gdf_municipios(año: int, nivel: str = "municipio",
 
 
 def _calcular_indice_brecha(ocu: pd.DataFrame,
-                             dist: pd.DataFrame) -> pd.DataFrame:
+                             dist: pd.DataFrame,
+                             categoria: str = "SUELDOS_SALARIOS") -> pd.DataFrame:
     # Normalizar municipio a minúsculas para el join entre ocu y dist
     ocu  = ocu.copy()
     dist = dist.copy()
@@ -217,7 +218,7 @@ def _calcular_indice_brecha(ocu: pd.DataFrame,
     ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
 
     sal = (
-        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        dist[dist["MEDIDAS_CODE"] == categoria]
         .groupby(["municipio", "año"], as_index=False)["OBS_VALUE"].median()
         .rename(columns={"OBS_VALUE": "pct_salarios"})
     )
@@ -228,7 +229,8 @@ def _calcular_indice_brecha(ocu: pd.DataFrame,
 
 
 def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
-                                     dist: pd.DataFrame) -> pd.DataFrame:
+                                     dist: pd.DataFrame,
+                                     categoria: str = "SUELDOS_SALARIOS") -> pd.DataFrame:
     ocu_hm = (
         ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
         .groupby(["seccion_key", "año", "sexo"], as_index=False)["num_casos"].sum()
@@ -239,7 +241,7 @@ def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
     ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
 
     sal = (
-        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        dist[dist["MEDIDAS_CODE"] == categoria]
         .groupby(["seccion_key", "año"], as_index=False)["OBS_VALUE"].median()
         .rename(columns={"OBS_VALUE": "pct_salarios"})
     )
@@ -250,6 +252,44 @@ def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
 
 
 # ── Constantes compartidas ────────────────────────────────────────────────────
+CATEGORIA_MAP = {
+    "SUELDOS_SALARIOS": {
+        "nombre_corto": "salarial",
+        "nombre_completo": "brecha salarial de género",
+        "leyenda": "Índice de brecha salarial",
+        "formula": "ratio H/(H+M) × % sueldos sobre renta",
+        "desc": "sueldos y salarios",
+    },
+    "PENSIONES": {
+        "nombre_corto": "de pensiones",
+        "nombre_completo": "brecha de pensiones de género",
+        "leyenda": "Índice de brecha de pensiones",
+        "formula": "ratio H/(H+M) × % pensiones sobre renta",
+        "desc": "pensiones",
+    },
+    "PRESTACIONES_DESEMPLEO": {
+        "nombre_corto": "de desempleo",
+        "nombre_completo": "brecha de prestaciones de desempleo",
+        "leyenda": "Índice de brecha de desempleo",
+        "formula": "ratio H/(H+M) × % desempleo sobre renta",
+        "desc": "prestaciones por desempleo",
+    },
+    "OTRAS_PRESTACIONES": {
+        "nombre_corto": "de prestaciones",
+        "nombre_completo": "brecha de otras prestaciones de género",
+        "leyenda": "Índice de brecha de prestaciones",
+        "formula": "ratio H/(H+M) × % otras prestaciones sobre renta",
+        "desc": "otras prestaciones",
+    },
+    "OTROS_INGRESOS": {
+        "nombre_corto": "de otros ingresos",
+        "nombre_completo": "brecha de otros ingresos de género",
+        "leyenda": "Índice de brecha de otros ingresos",
+        "formula": "ratio H/(H+M) × % otros ingresos sobre renta",
+        "desc": "otros ingresos",
+    },
+}
+
 ISLAS_ORDEN = [
     "Canarias", "Tenerife", "Gran Canaria", "La Palma",
     "La Gomera", "El Hierro", "Lanzarote", "Fuerteventura",
@@ -388,11 +428,12 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
     AÑO_INI = cfg.get("ano_ini", 2021)
     AÑO_FIN = cfg.get("ano_fin", 2023)
     UMBRAL  = cfg.get("umbral", 0.02)
+    CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
 
     ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
     dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
 
-    merged = _calcular_indice_brecha(ocu, dist)
+    merged = _calcular_indice_brecha(ocu, dist, CATEGORIA)
 
     ini  = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(
         columns={"indice_brecha": "brecha_ini"})
@@ -417,6 +458,10 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         "Sin cambio relevante": "#AAAAAA",
     }
 
+    info_cat = CATEGORIA_MAP.get(CATEGORIA, CATEGORIA_MAP["SUELDOS_SALARIOS"])
+    nombre_completo = info_cat["nombre_completo"]
+    nombre_corto = info_cat["nombre_corto"]
+
     p = (
         ggplot(top, aes(x="reorder(municipio, delta)", y="delta", fill="direccion"))
         + geom_col(width=0.65, alpha=0.9)
@@ -424,9 +469,9 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         + scale_fill_manual(values=COLORES, name=None)
         + coord_flip()
         + labs(
-            title="Municipios con mayor cambio en brecha salarial de género",
-            subtitle="SC de Tenerife (2021-2023)",
-            x="", y="Cambio en índice de brecha salarial",
+            title=f"Municipios con mayor cambio en {nombre_completo}",
+            subtitle=f"SC de Tenerife ({AÑO_INI}-{AÑO_FIN})",
+            x="", y=f"Cambio en índice de brecha {nombre_corto}",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )
         + theme_minimal()
@@ -459,6 +504,7 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cfg      = get_plot_config()["brecha_salarial"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
     NIVEL    = cfg.get("nivel", "municipio")
+    CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
 
     cmap_mapa = LinearSegmentedColormap.from_list(
         "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
@@ -472,9 +518,9 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         ocu["seccion_key"] = ocu["geocode"].astype(str).str.split("_", n=1).str[1]
         dist = dist.copy()
         dist["seccion_key"] = dist["TERRITORIO_CODE"].astype(str).str.split("_", n=1).str[1]
-        merged = _calcular_indice_brecha_seccion(ocu, dist)
+        merged = _calcular_indice_brecha_seccion(ocu, dist, CATEGORIA)
     else:
-        merged = _calcular_indice_brecha(ocu, dist)
+        merged = _calcular_indice_brecha(ocu, dist, CATEGORIA)
 
     lim = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
     if lim == 0:
@@ -545,10 +591,14 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
                     label="Sin dato en fuente")],
                 loc="lower left", fontsize=8, frameon=False)
 
+    info_cat = CATEGORIA_MAP.get(CATEGORIA, CATEGORIA_MAP["SUELDOS_SALARIOS"])
+    nombre_completo = info_cat["nombre_completo"]
+    nombre_corto = info_cat["nombre_corto"]
+
     sm = ScalarMappable(cmap=cmap_mapa, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
-    cbar.set_label("Índice de brecha salarial", fontsize=10)
+    cbar.set_label(info_cat["leyenda"], fontsize=10)
     cbar.ax.text(0.5, -0.02, "mujeres", transform=cbar.ax.transAxes,
                  ha="center", va="top", fontsize=8, color="#D94A8C")
     cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
@@ -556,11 +606,11 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
 
     nivel_label = "sección censal" if NIVEL == "seccion" else "municipio"
     fig.suptitle(
-        f"Brecha salarial de género por {nivel_label} — SC. de Tenerife {AÑO_MAPA}",
+        f"Brecha {nombre_corto} de género por {nivel_label} — SC. de Tenerife {AÑO_MAPA}",
         fontsize=15, fontweight="bold", y=0.95)
     fig.text(
         0.5, 0.01,
-        "Índice = ratio H/(H+M) × % sueldos sobre renta · Fuente: ISTAC",
+        f"Índice = ratio H/(H+M) × % {info_cat['desc']} sobre renta · Fuente: ISTAC",
         ha="center", fontsize=9, color="#666666",
         transform=fig.transFigure)
     fig.tight_layout(rect=[0, 0.04, 1, 1])
