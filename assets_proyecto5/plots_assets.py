@@ -733,46 +733,61 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
             ax.plot([sub.min(), sub.max()], [y, y],
                     color="#dddddd", lw=3, solid_capstyle="round", zorder=2)
 
+    unique_entities = sorted(pivot["entidad"].unique())
+    n_entities = len(unique_entities)
+
+    if n_entities > 9:
+        # Teñir todos del mismo color (usar color de la isla o verde por defecto)
+        color_unico = COLORES_ISLAS.get(isla_cfg, "#1B9E77") if isla_cfg != "Todas" else "#1B9E77"
+        colores_mapping = {ent: color_unico for ent in unique_entities}
+    else:
+        # Usar una paleta de brewer (Set1)
+        cmap = plt.get_cmap("Set1")
+        colores_mapping = {
+            ent: mcolors.to_hex(cmap(i % 9))
+            for i, ent in enumerate(unique_entities)
+        }
+
     # Puntos por entidad (isla o municipio)
-    if isla_cfg != "Todas":
-        # Para municipios de una isla concreta:
-        # Usamos el color de esa isla
-        color_isla = COLORES_ISLAS.get(isla_cfg, "#1B9E77") # fallback a verde (Tenerife)
-        
+    if n_entities > 9:
         np.random.seed(42)
         # Determinamos las posiciones Y base
         ys_base = np.array([orden_act.index(a) for a in pivot["actividad_short"]])
         # Añadimos un jitter aleatorio determinista
         ys_jittered = ys_base + np.random.uniform(-0.15, 0.15, size=len(pivot))
         
+        # Color list based on mapping (all same color)
+        color_list = [colores_mapping[ent] for ent in pivot["entidad"]]
         ax.scatter(pivot["ratio_hm"], ys_jittered,
-                   color=color_isla, s=65, zorder=4,
+                   c=color_list, s=65, zorder=4,
                    edgecolors="white", linewidths=0.5,
                    alpha=0.8,
-                   label=f"Municipios de {isla_cfg}")
+                   label=f"Municipios de {isla_cfg}" if isla_cfg != "Todas" else f"Entidades ({n_entities})")
     else:
-        # Jitter vertical determinista por isla para evitar solapamientos en Y
-        ISLAS_LIST = list(COLORES_ISLAS.keys())
-        def get_island_jitter(isla_name):
+        # get dynamic jitter per entity
+        def get_entity_jitter(ent_name):
             try:
-                idx = ISLAS_LIST.index(isla_name)
+                idx = unique_entities.index(ent_name)
                 # Distribuye uniformemente de -0.1 a 0.1
-                return -0.1 + idx * 0.033
+                if n_entities > 1:
+                    return -0.1 + idx * (0.2 / (n_entities - 1))
+                return 0.0
             except ValueError:
                 return 0.0
 
-        # Puntos por isla
-        for isla, color in COLORES_ISLAS.items():
-            sub = pivot[pivot["entidad"] == isla].copy()
+        # Puntos por entidad individual
+        for ent in unique_entities:
+            sub = pivot[pivot["entidad"] == ent].copy()
             if sub.empty:
                 continue
-            jitter = get_island_jitter(isla)
+            color = colores_mapping[ent]
+            jitter = get_entity_jitter(ent)
             ys = [orden_act.index(a) + jitter for a in sub["actividad_short"]]
             ax.scatter(sub["ratio_hm"], ys,
                        color=color, s=70, zorder=4,
                        edgecolors="white", linewidths=0.6,
-                       alpha=0.85,  # Transparencia leve para discernir solapamientos
-                       label=isla)
+                       alpha=0.85,
+                       label=ent)
 
     # Punto de media por actividad (triángulo negro) como referencia agregada
     for act in orden_act:
@@ -803,7 +818,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
                                label=media_label)
     handles.append(media_handle)
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0),
-              fontsize=8.5, frameon=False, title="Entidad" if isla_cfg != "Todas" else "Isla", title_fontsize=8.5)
+              fontsize=8.5, frameon=False, title="Entidad" if n_entities > 9 or isla_cfg != "Todas" else "Isla", title_fontsize=8.5)
 
     mes_names = {
         1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",

@@ -1420,6 +1420,14 @@ def check_datos_segregacion_sectorial(context):
     passed = passed and ok
     report_md += f"- Celdas con masa suficiente (n ≥ {MIN_C}): {'🟢' if ok else '🔴'} ({celdas_validas} celdas)\n"
 
+    # Verificar cantidad de puntos/entidades a graficar (máximo 9 para paleta Brewer, si no aviso y color único)
+    n_entidades = len(pivot.index.get_level_values(1).unique())
+    ok_puntos = n_entidades <= 9
+    passed = passed and ok_puntos
+    report_md += f"- Puntos/entidades a graficar (≤ 9): {'🟢' if ok_puntos else '⚠️'} ({n_entidades} puntos)\n"
+    if not ok_puntos:
+        report_md += f"\n⚠️ **AVISO**: Hay más de 9 puntos ({n_entidades}). Se empleará coloración uniforme en el dotplot.\n"
+
     return AssetCheckResult(
         passed=bool(passed), severity=AssetCheckSeverity.WARN,
         metadata={"check": MetadataValue.md(report_md)})
