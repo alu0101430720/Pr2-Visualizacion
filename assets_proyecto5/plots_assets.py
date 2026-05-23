@@ -969,6 +969,7 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
 
     cfg  = get_plot_config().get("brecha_temporal_edad", {})
     ISLA = cfg.get("isla", "Todas")
+    ANOTAR = cfg.get("anotar", True)
     SOLO_MAYOR = cfg.get("anotar_solo_mayor", True)
     AÑO = cfg.get("ano", 2026)
     MES = cfg.get("mes", 3)
@@ -1033,17 +1034,18 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
             all_vals[sexo] = vals
 
         # Anotaciones: solo la barra más alta por panel, o todas si SOLO_MAYOR=False
-        for sexo, offset in [("Hombres", -w/2), ("Mujeres", w/2)]:
-            vals = all_vals[sexo]
-            max_v = max(vals)
-            for xi, (tc, v) in enumerate(zip(TC_LABEL_ORDER, vals)):
-                if v < 4:
-                    continue
-                if SOLO_MAYOR and v < max_v:
-                    continue
-                ax.text(xi + offset, v + 0.4, f"{v:.0f}%",
-                        ha="center", va="bottom", fontsize=7.5,
-                        color=COLORS[sexo], fontweight="bold")
+        if ANOTAR:
+            for sexo, offset in [("Hombres", -w/2), ("Mujeres", w/2)]:
+                vals = all_vals[sexo]
+                max_v = max(vals)
+                for xi, (tc, v) in enumerate(zip(TC_LABEL_ORDER, vals)):
+                    if v < 4:
+                        continue
+                    if SOLO_MAYOR and v < max_v:
+                        continue
+                    ax.text(xi + offset, v + 0.4, f"{v:.0f}%",
+                            ha="center", va="bottom", fontsize=7.5,
+                            color=COLORS[sexo], fontweight="bold")
 
         ax.set_xticks(x)
         ax.set_xticklabels(TC_LABEL_ORDER, fontsize=9, rotation=20, ha="right")

@@ -40,7 +40,7 @@ actividad_barras:
   # dataset: Por defecto "actividad-sc-3.csv"
   dataset: "actividad-sc-3.csv"
   # isla: Isla objetivo para el gráfico de barras.
-  # Opciones: "Tenerife", "Gran Canaria", "La Palma", "Lanzarote", "Fuerteventura", "La Gomera", "El Hierro", o "Todas"
+  # Opciones: "Tenerife", "La Palma", "La Gomera", "El Hierro", o "Todas"
   isla: "Tenerife"
   # modo: Composición visual del gráfico.
   # Opciones: 
@@ -75,10 +75,12 @@ brecha_salarial:
 brecha_temporal_edad:
   # isla: Isla para el gráfico de brecha temporal.
   # Opciones: "Todas", "Tenerife", "Gran Canaria", "La Palma", "Lanzarote", "Fuerteventura", "La Gomera", "El Hierro"
-  isla: "Tenerife"
+  isla: "Todas"
+  # anotar: Mostrar etiquetas de porcentaje sobre las barras. Opciones: true, false
+  anotar: false
   # anotar_solo_mayor: Mostrar etiquetas de texto.
   # Opciones: true (solo anota la barra más alta de cada panel), false (anota todas las barras > 4%)
-  anotar_solo_mayor: true
+  anotar_solo_mayor: false
   # ano / mes: Año y mes de contratos de la provincia.
   # Opciones de año: 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026
   # Opciones de mes: 1 a 12 (si se comenta o es null, carga el año completo)
