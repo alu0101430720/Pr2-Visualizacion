@@ -1034,7 +1034,8 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
             if 2022 in AÑOS:
                 idx_22 = AÑOS.index(2022)
                 ax.axvline(idx_22, color="#888888", lw=0.9, ls="--", zorder=2, alpha=0.7)
-                ax.text(idx_22 - 0.08, 58, "Reforma Laboral",
+                ax.text(idx_22 - 0.08, 0.95, "Reforma Laboral",
+                        transform=ax.get_xaxis_transform(),
                         color="#666666", fontsize=7, rotation=90,
                         ha="right", va="top", style="italic")
 
@@ -1058,14 +1059,14 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
         handles += [plt.scatter([], [], marker="D", color="#aaaaaa",
                                 s=40, alpha=0.6, label="Mar 2026 (dato parcial)")]
         fig.legend(handles=handles, loc="lower center", ncol=3,
-                   fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.03))
+                   fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.02))
 
         fig.suptitle(f"{TC_TITLE[tc_name]} — Canarias 2019-2026",
                      fontsize=13, fontweight="bold", y=0.965)
         fig.text(0.99, 0.015, "Fuente: OBECAN / SEPE",
                  ha="right", fontsize=8, color="#888888")
 
-        plt.tight_layout(rect=[0, 0.08, 1, 0.93])
+        plt.tight_layout(rect=[0, 0.12, 1, 0.93])
 
         safe = tc_name.lower().replace(". ", "_").replace(" ", "_")
         safe = "".join(c for c in unicodedata.normalize("NFD", safe) if unicodedata.category(c) != "Mn")
