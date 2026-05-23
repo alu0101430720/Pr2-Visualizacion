@@ -3,8 +3,6 @@
 expected_plots:
   - filename: "actividad_barras.png"
     asset_name: "plot_actividad_barras"
-  - filename: "brecha_salarial_divergente.png"
-    asset_name: "plot_brecha_salarial"
   - filename: "mapa_brecha_salarial.png"
     asset_name: "plot_mapa_brecha_salarial"
   - filename: "gini_evolucion_islas.png"
