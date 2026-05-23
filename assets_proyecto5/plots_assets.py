@@ -224,7 +224,7 @@ def _calcular_indice_brecha(ocu: pd.DataFrame,
     )
 
     merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
-    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    merged["indice_brecha"] = merged["ratio_hm"] - 0.5
     return merged
 
 
@@ -247,7 +247,7 @@ def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
     )
 
     merged = ocu_hm.merge(sal, on=["seccion_key", "año"], how="inner")
-    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    merged["indice_brecha"] = merged["ratio_hm"] - 0.5
     return merged
 
 
@@ -598,7 +598,7 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     sm = ScalarMappable(cmap=cmap_mapa, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
-    cbar.set_label(info_cat["leyenda"], fontsize=10)
+    cbar.set_label(f"{info_cat['leyenda']} (H/(H+M) - 0.5)", fontsize=10)
     cbar.ax.text(0.5, -0.02, "mujeres", transform=cbar.ax.transAxes,
                  ha="center", va="top", fontsize=8, color="#D94A8C")
     cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
@@ -610,7 +610,7 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         fontsize=15, fontweight="bold", y=0.95)
     fig.text(
         0.5, 0.01,
-        f"Índice = ratio H/(H+M) × % {info_cat['desc']} sobre renta · Fuente: ISTAC",
+        f"Índice = H/(H+M) - 0.5 (filtrado por {info_cat['desc']}) · Fuente: ISTAC",
         ha="center", fontsize=9, color="#666666",
         transform=fig.transFigure)
     fig.tight_layout(rect=[0, 0.04, 1, 1])

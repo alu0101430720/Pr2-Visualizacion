@@ -186,7 +186,7 @@ def _indice_brecha(cfg: dict) -> pd.DataFrame:
         .reset_index()
     )
     merged = ocu_hm.merge(sal, on=["municipio", "año"])
-    merged["indice"] = (merged["ratio_hm"] - 0.5) * merged["OBS_VALUE"]
+    merged["indice"] = merged["ratio_hm"] - 0.5
     return merged
 
 
