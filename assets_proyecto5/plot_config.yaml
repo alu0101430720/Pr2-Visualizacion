@@ -143,14 +143,14 @@ segregacion_sectorial:
   # top_n: Número de actividades más representativas a mostrar en el dotplot (ej. 15).
   top_n: 15
   # min_contratos: Masa crítica requerida en la celda actividad-isla para calcular ratio (ej. 15).
-  min_contratos: 1
+  min_contratos: 10
   # ano / mes: Año y mes de contratos.
   # Opciones de año de 2019 a 2026
   # Opciones de mes de 1 a 12
   ano: 2026
   mes: 3
   # isla: Ámbito geográfico. Opciones: "Todas" (por defecto) o una isla específica ("Tenerife", "Gran Canaria", etc.)
-  isla: "La Gomera"
+  isla: "Todas"
 
 historico_tipos_contrato:
   # ano_fin: Año de finalización de la serie temporal. Opciones: 2019 a 2026.

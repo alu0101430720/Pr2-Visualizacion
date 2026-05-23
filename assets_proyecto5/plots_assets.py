@@ -742,7 +742,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
         colores_mapping = {ent: color_unico for ent in unique_entities}
     else:
         # Usar una paleta de brewer (Set1)
-        cmap = plt.get_cmap("Set1")
+        cmap = plt.get_cmap("Dark2")
         colores_mapping = {
             ent: mcolors.to_hex(cmap(i % 9))
             for i, ent in enumerate(unique_entities)
@@ -803,7 +803,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     ax.set_yticklabels(orden_act, fontsize=9.5)
     ax.set_xlim(0.0, 1.0)
     ax.set_xticks([0, 0.25, 0.5, 0.75, 1.0])
-    ax.set_xticklabels(["0%", "25%", "50%\n(paridad)", "75%", "100%"],
+    ax.set_xticklabels(["0%", "25%", "50%", "75%", "100%"],
                        fontsize=8.5)
     ax.set_xlabel("% hombres contratados", fontsize=10)
     ax.xaxis.grid(True, color="#eeeeee", zorder=0)
