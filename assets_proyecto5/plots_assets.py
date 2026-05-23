@@ -190,7 +190,12 @@ def cargar_gdf_municipios(año: int, nivel: str = "municipio", logger=None) -> g
             logger.warning(f"GeoJSON no encontrado: {path}")
         return None
     gdf = gpd.read_file(path).set_crs("EPSG:4326", allow_override=True)
-    gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
+    
+    # Extraer y normalizar nombres de municipio (resuelve desajustes de mayúsculas/minúsculas)
+    gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")[0]
+    gdf["municipio"] = gdf["municipio"].str.replace(" de La ", " de la ", regex=False)
+    gdf["municipio"] = gdf["municipio"].str.replace(" de la Laguna", " de La Laguna", regex=False)
+    
     if nivel == "seccion":
         return gdf[["municipio", "geometry"]]
     return gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
@@ -598,13 +603,13 @@ def plot_gini_evolucion_islas(context: AssetExecutionContext) -> None:
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     """
-    Dot plot de Cleveland: ratio H/(H+M) por actividad e isla.
-    Historia: ¿cómo varía la segregación de cada actividad entre islas?
+    Dot plot de Cleveland: ratio H/(H+M) por actividad e isla (o por municipio para una isla).
+    Historia: ¿cómo varía la segregación de cada actividad entre islas/municipios?
 
     Gramática de gráficos:
       - Canal principal: posición en eje X común (el más preciso, Cleveland 1984)
       - Canal secundario: color por isla (identidad, no magnitud)
-      - Facet por actividad: comparación entre islas dentro de cada panel
+      - Facet por actividad: comparación entre islas/municipios dentro de cada panel
       - Línea de referencia en 0.5 (paridad) como figura; puntos como fondo
 
     Gestalt:
@@ -613,10 +618,11 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
       - Similitud: color por isla coherente con el resto del proyecto
       - Figura/Fondo: línea gris clara de fondo, puntos de color en primer plano
     """
-    cfg   = get_plot_config().get("segregacion_sectorial", {})
-    TOP_N = cfg.get("top_n", 15)
-    AÑO   = cfg.get("ano", 2026)
-    MES   = cfg.get("mes", 3)
+    cfg      = get_plot_config().get("segregacion_sectorial", {})
+    TOP_N    = cfg.get("top_n", 15)
+    AÑO      = cfg.get("ano", 2026)
+    MES      = cfg.get("mes", 3)
+    isla_cfg = cfg.get("isla", "Todas")
 
     df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
     if df is None:
@@ -627,6 +633,12 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     df["Contratos"] = df["c"]
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].str.strip()
+
+    if isla_cfg != "Todas":
+        df = df[df["isla"].str.upper() == isla_cfg.upper()]
+        if df.empty:
+            context.log.warning(f"No hay datos de contratos para la isla {isla_cfg} en {AÑO}-{MES:02d}.")
+            return
 
     top_act = (df.groupby("Actividad económica")["Contratos"]
                .sum().nlargest(TOP_N).index.tolist())
@@ -659,12 +671,15 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     COLORES_ISLAS = get_colores_isla()
 
     # ── Preparar datos ────────────────────────────────────────────────────────
+    entidad_col = "Municipio" if isla_cfg != "Todas" else "isla"
     pivot = (
         df[df["Actividad económica"].isin(top_act)]
-        .groupby(["Actividad económica", "isla", "sexo"])["Contratos"]
+        .groupby(["Actividad económica", entidad_col, "sexo"])["Contratos"]
         .sum().unstack("sexo").reset_index()
     )
     pivot.columns.name = None
+    pivot = pivot.rename(columns={entidad_col: "entidad"})
+
     for col in ["Hombres", "Mujeres"]:
         if col not in pivot.columns:
             pivot[col] = 0
@@ -677,7 +692,10 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
     pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV).fillna(
         pivot["Actividad económica"].str[:30])
-    pivot["isla"] = pivot["isla"].str.strip().str.title()
+    
+    pivot["entidad"] = pivot["entidad"].str.strip()
+    if isla_cfg == "Todas":
+        pivot["entidad"] = pivot["entidad"].str.title()
 
     # Ordenar actividades por ratio medio (más feminizadas arriba,
     # más masculinizadas abajo) — Gestalt: orden emergente sin leyenda
@@ -707,7 +725,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     ax.text(0.5, -0.7, "paridad", ha="center", va="top",
             fontsize=7.5, color="#aaaaaa", style="italic")
 
-    # Segmento horizontal del rango inter-isla por actividad (dispersión visual)
+    # Segmento horizontal del rango inter-entidades por actividad (dispersión visual)
     for act in orden_act:
         sub = pivot[pivot["actividad_short"] == act]["ratio_hm"]
         if len(sub) >= 2:
@@ -715,28 +733,46 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
             ax.plot([sub.min(), sub.max()], [y, y],
                     color="#dddddd", lw=3, solid_capstyle="round", zorder=2)
 
-    # Jitter vertical determinista por isla para evitar solapamientos en Y
-    ISLAS_LIST = list(COLORES_ISLAS.keys())
-    def get_island_jitter(isla_name):
-        try:
-            idx = ISLAS_LIST.index(isla_name)
-            # Distribuye uniformemente de -0.1 a 0.1
-            return -0.1 + idx * 0.033
-        except ValueError:
-            return 0.0
+    # Puntos por entidad (isla o municipio)
+    if isla_cfg != "Todas":
+        # Para municipios de una isla concreta:
+        # Usamos el color de esa isla
+        color_isla = COLORES_ISLAS.get(isla_cfg, "#1B9E77") # fallback a verde (Tenerife)
+        
+        np.random.seed(42)
+        # Determinamos las posiciones Y base
+        ys_base = np.array([orden_act.index(a) for a in pivot["actividad_short"]])
+        # Añadimos un jitter aleatorio determinista
+        ys_jittered = ys_base + np.random.uniform(-0.15, 0.15, size=len(pivot))
+        
+        ax.scatter(pivot["ratio_hm"], ys_jittered,
+                   color=color_isla, s=65, zorder=4,
+                   edgecolors="white", linewidths=0.5,
+                   alpha=0.8,
+                   label=f"Municipios de {isla_cfg}")
+    else:
+        # Jitter vertical determinista por isla para evitar solapamientos en Y
+        ISLAS_LIST = list(COLORES_ISLAS.keys())
+        def get_island_jitter(isla_name):
+            try:
+                idx = ISLAS_LIST.index(isla_name)
+                # Distribuye uniformemente de -0.1 a 0.1
+                return -0.1 + idx * 0.033
+            except ValueError:
+                return 0.0
 
-    # Puntos por isla
-    for isla, color in COLORES_ISLAS.items():
-        sub = pivot[pivot["isla"] == isla].copy()
-        if sub.empty:
-            continue
-        jitter = get_island_jitter(isla)
-        ys = [orden_act.index(a) + jitter for a in sub["actividad_short"]]
-        ax.scatter(sub["ratio_hm"], ys,
-                   color=color, s=70, zorder=4,
-                   edgecolors="white", linewidths=0.6,
-                   alpha=0.85,  # Transparencia leve para discernir solapamientos
-                   label=isla)
+        # Puntos por isla
+        for isla, color in COLORES_ISLAS.items():
+            sub = pivot[pivot["entidad"] == isla].copy()
+            if sub.empty:
+                continue
+            jitter = get_island_jitter(isla)
+            ys = [orden_act.index(a) + jitter for a in sub["actividad_short"]]
+            ax.scatter(sub["ratio_hm"], ys,
+                       color=color, s=70, zorder=4,
+                       edgecolors="white", linewidths=0.6,
+                       alpha=0.85,  # Transparencia leve para discernir solapamientos
+                       label=isla)
 
     # Punto de media por actividad (triángulo negro) como referencia agregada
     for act in orden_act:
@@ -760,13 +796,14 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     ax.spines["bottom"].set_color("#dddddd")
     ax.tick_params(axis="y", length=0)
 
-    # Leyenda islas + símbolo de media
+    # Leyenda entidad + símbolo de media
     handles, labels = ax.get_legend_handles_labels()
+    media_label = f"Media {isla_cfg}" if isla_cfg != "Todas" else "Media Canarias"
     media_handle = plt.scatter([], [], marker="D", s=30, color="#333333",
-                               label="Media Canarias")
+                               label=media_label)
     handles.append(media_handle)
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0),
-              fontsize=8.5, frameon=False, title="Isla", title_fontsize=8.5)
+              fontsize=8.5, frameon=False, title="Entidad" if isla_cfg != "Todas" else "Isla", title_fontsize=8.5)
 
     mes_names = {
         1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
@@ -774,14 +811,15 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     }
     title_date = f"{mes_names.get(MES, f'{MES:02d}')} {AÑO}"
 
-    ax.set_title(
-        f"Segregación de género por actividad e isla — Canarias, {title_date}",
-        fontsize=12, fontweight="bold", pad=12)
-    fig.text(
-        0.01, 0.0,
-        "◆ = media Canarias  ·  barra gris = rango entre islas  "
-        "·  Fuente: SEPE / OBECAN",
-        fontsize=8, color="#666666")
+    if isla_cfg != "Todas":
+        title_text = f"Segregación de género por actividad en municipios de {isla_cfg} — {title_date}"
+        caption_text = f"◆ = media {isla_cfg}  ·  barra gris = rango entre municipios  ·  Fuente: SEPE / OBECAN"
+    else:
+        title_text = f"Segregación de género por actividad e isla — Canarias, {title_date}"
+        caption_text = "◆ = media Canarias  ·  barra gris = rango entre islas  ·  Fuente: SEPE / OBECAN"
+
+    ax.set_title(title_text, fontsize=12, fontweight="bold", pad=12)
+    fig.text(0.01, 0.0, caption_text, fontsize=8, color="#666666")
 
     plt.tight_layout(rect=[0, 0.02, 1, 1])
     out = os.path.join(get_plot_dir(), "segregacion_sectorial_dotplot.png")

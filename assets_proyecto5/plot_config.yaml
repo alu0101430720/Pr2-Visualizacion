@@ -149,6 +149,8 @@ segregacion_sectorial:
   # Opciones de mes de 1 a 12
   ano: 2026
   mes: 3
+  # isla: Ámbito geográfico. Opciones: "Todas" (por defecto) o una isla específica ("Tenerife", "Gran Canaria", etc.)
+  isla: "Tenerife"
 
 historico_tipos_contrato:
   # ano_fin: Año de finalización de la serie temporal. Opciones: 2019 a 2026.

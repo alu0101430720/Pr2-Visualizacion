@@ -1345,22 +1345,23 @@ def check_datos_historico_contratos(context):
 @asset_check(
     asset=plot_segregacion_sectorial,
     description=(
-        "Verifica que contratos_202512.csv tiene las 7 islas, ambos sexos, "
-        "y actividades con masa suficiente para el Cleveland dot plot."
+        "Verifica que el CSV de contratos tiene los datos necesarios, con islas/municipios y "
+        "ambos sexos, y actividades con masa suficiente para el Cleveland dot plot."
     ),
 )
 def check_datos_segregacion_sectorial(context):
     """
     Gestalt — Similitud: color coherente por isla.
-    Gestalt — Proximidad: puntos agrupados por actividad.
-    Cierre/Masa: requiere un mínimo de 30 contratos por celda (isla-actividad) para ser representativo.
+    Gestalt — Proximidad: puntos agrupados por actividad/municipio.
+    Cierre/Masa: requiere un mínimo de contratos por celda para ser representativo.
     """
     passed   = True
     report_md = "### Check: segregacion_sectorial_dotplot\n\n"
 
-    cfg = get_plot_config().get("segregacion_sectorial", {})
-    AÑO = cfg.get("ano", 2025)
-    MES = cfg.get("mes", 12)
+    cfg      = get_plot_config().get("segregacion_sectorial", {})
+    AÑO      = cfg.get("ano", 2026)
+    MES      = cfg.get("mes", 3)
+    isla_cfg = cfg.get("isla", "Todas")
     
     df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
     if df is None:
@@ -1375,23 +1376,43 @@ def check_datos_segregacion_sectorial(context):
     passed = passed and ok
     report_md += f"- Ambos sexos: {'🟢' if ok else '🔴'}\n"
 
-    ISLAS_ESPERADAS = {"EL HIERRO","LA GOMERA","LA PALMA","TENERIFE",
-                       "GRAN CANARIA","LANZAROTE","FUERTEVENTURA"}
     islas_datos = set(df["isla"].dropna().str.upper().unique())
-    faltantes   = ISLAS_ESPERADAS - islas_datos
-    ok = len(faltantes) == 0
-    passed = passed and ok
-    report_md += f"- 7 islas presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
-
-    cfg   = get_plot_config().get("segregacion_sectorial", {})
-    TOP_N = cfg.get("top_n", 15)
-    top_act = (df.groupby("Actividad económica")["Contratos"]
-               .sum().nlargest(TOP_N).index.tolist())
     
-    pivot = (df[df["Actividad económica"].isin(top_act)]
-             .groupby(["Actividad económica","isla","sexo"])["Contratos"]
-             .sum().unstack("sexo").fillna(0))
+    if isla_cfg != "Todas":
+        # Verificar que la isla elegida tiene datos
+        ok = isla_cfg.upper() in islas_datos
+        passed = passed and ok
+        report_md += f"- Isla `{isla_cfg}` presente en datos: {'🟢' if ok else '🔴'}\n"
+    else:
+        # Verificar que las 7 islas están presentes
+        ISLAS_ESPERADAS = {"EL HIERRO","LA GOMERA","LA PALMA","TENERIFE",
+                           "GRAN CANARIA","LANZAROTE","FUERTEVENTURA"}
+        faltantes = ISLAS_ESPERADAS - islas_datos
+        ok = len(faltantes) == 0
+        passed = passed and ok
+        report_md += f"- 7 islas presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
+
+    TOP_N = cfg.get("top_n", 15)
+    
+    if isla_cfg != "Todas":
+        df_filtered = df[df["isla"].str.upper() == isla_cfg.upper()].copy()
+        top_act = (df_filtered.groupby("Actividad económica")["Contratos"]
+                   .sum().nlargest(TOP_N).index.tolist())
+        pivot = (df_filtered[df_filtered["Actividad económica"].isin(top_act)]
+                 .groupby(["Actividad económica", "Municipio", "sexo"])["Contratos"]
+                 .sum().unstack("sexo").fillna(0))
+    else:
+        df_filtered = df.copy()
+        top_act = (df_filtered.groupby("Actividad económica")["Contratos"]
+                   .sum().nlargest(TOP_N).index.tolist())
+        pivot = (df_filtered[df_filtered["Actividad económica"].isin(top_act)]
+                 .groupby(["Actividad económica", "isla", "sexo"])["Contratos"]
+                 .sum().unstack("sexo").fillna(0))
              
+    for col in ["Hombres", "Mujeres"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+            
     pivot["total"] = pivot.get("Hombres",0) + pivot.get("Mujeres",0)
     MIN_C = cfg.get("min_contratos", 15)
     celdas_validas = int((pivot["total"] >= MIN_C).sum())
