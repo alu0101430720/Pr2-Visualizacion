@@ -1334,7 +1334,7 @@ def check_datos_historico_contratos(context):
 @asset_check(
     asset=plot_segregacion_sectorial,
     description=(
-        "Verifica que contratos_202603.csv tiene las 7 islas, ambos sexos, "
+        "Verifica que contratos_202512.csv tiene las 7 islas, ambos sexos, "
         "y actividades con masa suficiente para el Cleveland dot plot."
     ),
 )
@@ -1347,11 +1347,11 @@ def check_datos_segregacion_sectorial(context):
     passed   = True
     report_md = "### Check: segregacion_sectorial_dotplot\n\n"
 
-    fpath = get_processed_path("contratos_202603.csv")
+    fpath = get_processed_path("contratos_202512.csv")
     if not os.path.exists(fpath):
         return AssetCheckResult(
             passed=False, severity=AssetCheckSeverity.WARN,
-            metadata={"check": MetadataValue.md("🔴 contratos_202603.csv no encontrado.")})
+            metadata={"check": MetadataValue.md("🔴 contratos_202512.csv no encontrado.")})
 
     df = pd.read_csv(fpath)
     df.columns = df.columns.str.strip()
