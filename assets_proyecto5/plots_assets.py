@@ -182,7 +182,8 @@ def fmt_k(l):
     return [_f(v) for v in l]
 
 
-def cargar_gdf_municipios(año: int, nivel: str = "municipio", logger=None) -> gpd.GeoDataFrame | None:
+def cargar_gdf_municipios(año: int, nivel: str = "municipio",
+                           logger=None) -> gpd.GeoDataFrame | None:
     geojson_name = f"secciones_{año}0101_tenerife.json"
     path = get_geojson_path(geojson_name)
     if not os.path.exists(path):
@@ -190,20 +191,22 @@ def cargar_gdf_municipios(año: int, nivel: str = "municipio", logger=None) -> g
             logger.warning(f"GeoJSON no encontrado: {path}")
         return None
     gdf = gpd.read_file(path).set_crs("EPSG:4326", allow_override=True)
-    
-    # Extraer y normalizar nombres de municipio (resuelve desajustes de mayúsculas/minúsculas)
-    gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")[0]
-    gdf["municipio"] = gdf["municipio"].str.replace(" de La ", " de la ", regex=False)
-    gdf["municipio"] = gdf["municipio"].str.replace(" de la Laguna", " de La Laguna", regex=False)
-    
-    if nivel == "seccion":
-        return gdf[["municipio", "geometry"]]
-    return gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
+    gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
+
+    if nivel == "municipio":
+        return gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
+    else:
+        return gdf[["municipio", "geometry"]].copy()
 
 
 def _calcular_indice_brecha(ocu: pd.DataFrame,
                              dist: pd.DataFrame) -> pd.DataFrame:
-    """Calcula indice_brecha por municipio y año. Reutilizable entre assets."""
+    # Normalizar municipio a minúsculas para el join entre ocu y dist
+    ocu  = ocu.copy()
+    dist = dist.copy()
+    ocu["municipio"]  = ocu["municipio"].str.lower()
+    dist["municipio"] = dist["municipio"].str.lower()
+
     ocu_hm = (
         ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
         .groupby(["municipio", "año", "sexo"], as_index=False)["num_casos"].sum()
@@ -429,13 +432,12 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     Cmap invertido: rosa = favorable a hombres, azul = favorable a mujeres.
     Sin anotaciones de texto sobre el mapa.
 
-    Grises semánticos distintos:
-      #dddddd → municipio sin dato en la fuente (join fallido)
-      #999999 → municipio con dato pero descartado por umbral estadístico
+    El join entre GeoJSON y datos se hace con clave en minúsculas para
+    evitar discrepancias de capitalización entre fuentes.
+    Gris #cccccc → municipio en GeoJSON sin dato en ISTAC.
     """
     cfg      = get_plot_config()["brecha_salarial"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
-    MIN_TRAB = cfg.get("min_trabajadores", 30)  # umbral masa estadística
 
     cmap_mapa = LinearSegmentedColormap.from_list(
         "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
@@ -445,13 +447,6 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
 
     merged = _calcular_indice_brecha(ocu, dist)
-
-    # Masa por municipio en el año del mapa para identificar descartados
-    masa_mun = (
-        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["año"] == AÑO_MAPA)]
-        .groupby("municipio")["num_casos"].sum()
-        .reset_index(name="masa")
-    )
 
     lim = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
     if lim == 0:
@@ -467,36 +462,45 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         ax.set_title(f"{AÑO_MAPA} - Sin Datos Espaciales")
         ax.axis("off")
     else:
-        datos = merged[merged["año"] == AÑO_MAPA][["municipio", "indice_brecha"]]
-        gdf_p = gdf_mun.merge(datos, on="municipio", how="left")
-        gdf_p = gdf_p.merge(masa_mun, on="municipio", how="left")
+        datos = merged[merged["año"] == AÑO_MAPA][["municipio", "indice_brecha"]].copy()
 
-        # Clasificar municipios en tres grupos semánticos:
-        #   1. Con índice válido → colorear con cmap
-        #   2. Sin índice pero con masa suficiente → #dddddd (sin dato en fuente)
-        #   3. Con masa insuficiente o sin masa → #999999 (descartado por umbral)
-        tiene_indice    = gdf_p["indice_brecha"].notna()
-        tiene_masa      = gdf_p["masa"].fillna(0) >= MIN_TRAB
-        sin_dato_fuente = ~tiene_indice &  tiene_masa
-        bajo_umbral     = ~tiene_indice & ~tiene_masa
+        # Join con clave en minúsculas para evitar discrepancias de capitalización
+        datos["_key"] = datos["municipio"].str.lower()
+        gdf_p         = gdf_mun.copy()
+        gdf_p["_key"] = gdf_p["municipio"].str.lower()
+        gdf_p         = gdf_p.merge(
+            datos[["_key", "indice_brecha"]], on="_key", how="left"
+        ).drop(columns=["_key"])
 
-        # Capa 1: municipios con datos (cmap normal)
+        # Diagnóstico
+        sin_dato = gdf_p[gdf_p["indice_brecha"].isna()]["municipio"].unique()
+        if len(sin_dato) > 0:
+            context.log.warning(
+                f"Municipios sin índice tras join ({len(sin_dato)}): "
+                f"{sorted(sin_dato)}"
+            )
+
+        tiene_indice = gdf_p["indice_brecha"].notna()
+
+        # Capa 1: municipios con dato → cmap divergente
         gdf_p[tiene_indice].plot(
             column="indice_brecha", cmap=cmap_mapa,
             norm=norm, linewidth=0.15, edgecolor="white",
             legend=False, ax=ax)
 
-        # Capa 2: sin dato en fuente — gris claro
-        if sin_dato_fuente.any():
-            gdf_p[sin_dato_fuente].plot(
-                color="#dddddd", linewidth=0.15, edgecolor="white", ax=ax)
-
-        # Capa 3: descartado por umbral — gris medio
-        if bajo_umbral.any():
-            gdf_p[bajo_umbral].plot(
-                color="#999999", linewidth=0.15, edgecolor="white", ax=ax)
+        # Capa 2: municipios sin dato → gris neutro
+        if (~tiene_indice).any():
+            gdf_p[~tiene_indice].plot(
+                color="#cccccc", linewidth=0.15, edgecolor="white", ax=ax)
 
         ax.axis("off")
+
+        if (~tiene_indice).any():
+            ax.legend(
+                handles=[mpatches.Patch(
+                    color="#cccccc",
+                    label="Sin dato en fuente")],
+                loc="lower left", fontsize=8, frameon=False)
 
     sm = ScalarMappable(cmap=cmap_mapa, norm=norm)
     sm.set_array([])
@@ -507,27 +511,14 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
                  ha="center", va="bottom", fontsize=8, color="#4A90D9")
 
-    # Leyenda de grises como patches manuales
-    import matplotlib.patches as mpatches
-    leyenda_extra = []
-    if gdf_mun is not None:
-        if sin_dato_fuente.any():
-            leyenda_extra.append(
-                mpatches.Patch(color="#dddddd", label="Sin dato en fuente"))
-        if bajo_umbral.any():
-            leyenda_extra.append(
-                mpatches.Patch(color="#999999",
-                               label=f"Masa insuficiente (n < {MIN_TRAB})"))
-    if leyenda_extra:
-        ax.legend(handles=leyenda_extra, loc="lower left",
-                  fontsize=8, frameon=False)
-
-    fig.suptitle(f"Brecha salarial de género por municipio — Tenerife {AÑO_MAPA}",
-                 fontsize=15, fontweight="bold", y=0.95)
-    fig.text(0.5, 0.01,
-             "Índice = ratio H/(H+M) × % sueldos sobre renta · Fuente: ISTAC",
-             ha="center", fontsize=9, color="#666666",
-             transform=fig.transFigure)
+    fig.suptitle(
+        f"Brecha salarial de género por municipio — SC. de Tenerife {AÑO_MAPA}",
+        fontsize=15, fontweight="bold", y=0.95)
+    fig.text(
+        0.5, 0.01,
+        "Índice = ratio H/(H+M) × % sueldos sobre renta · Fuente: ISTAC",
+        ha="center", fontsize=9, color="#666666",
+        transform=fig.transFigure)
     fig.tight_layout(rect=[0, 0.04, 1, 1])
 
     out = os.path.join(get_plot_dir(), "mapa_brecha_salarial.png")

@@ -36,18 +36,6 @@ distribucion_lineas:
   # Rango disponible en datos: Años entre 2015 y 2023.
   x_breaks: [2021, 2022, 2023]
 
-mapa_distribucion:
-  # dataset: Por defecto "distribucion-renta-ingresos.csv"
-  dataset: "distribucion-renta-ingresos.csv"
-  # ano: Año para el mapa de renta. Opciones: 2015 a 2023.
-  ano: 2023
-  # componente: Categoría de ingresos a analizar.
-  # Opciones: "SUELDOS_SALARIOS", "PRESTACIONES_DESEMPLEO", "PENSIONES", "OTRAS_PRESTACIONES", "OTROS_INGRESOS"
-  componente: "SUELDOS_SALARIOS"
-  # cmap_unico: Opcional. Sobreescribe el colormap del mapa.
-  # Opciones: Cualquier colormap secuencial de matplotlib (ej. "YlOrRd", "viridis", "Blues")
-  # cmap_unico: "YlOrRd"
-
 actividad_barras:
   # dataset: Por defecto "actividad-sc-3.csv"
   dataset: "actividad-sc-3.csv"
@@ -73,6 +61,7 @@ brecha_salarial:
   ano_fin: 2023
   # ano_mapa: Año a renderizar en el mapa coroplético de brecha. Opciones: 2021 a 2023.
   ano_mapa: 2023
+  min_trabajadores: 10
   # umbral: Variación del índice bajo la cual el cambio se considera neutro (gris). Por defecto 0.02.
   umbral: 0.02
   # n_anotaciones_mapa: Municipios en extremos opuestos a etiquetar con texto en el mapa (ej. 3, 5).
@@ -134,10 +123,6 @@ ocupacion_divergente_canarias:
   # agregar_islas: Composición espacial.
   # Opciones: true (suma los contratos de todo el ámbito en un único panel), false (gráficos facetados por isla)
   agregar_islas: true
-
-mapa_feminizacion_municipios:
-  # ambito: Ámbito geográfico del mapa. Opciones: "Canarias", "SC Tenerife", "Las Palmas".
-  ambito: "Canarias"
 
 segregacion_sectorial:
   # top_n: Número de actividades más representativas a mostrar en el dotplot (ej. 15).

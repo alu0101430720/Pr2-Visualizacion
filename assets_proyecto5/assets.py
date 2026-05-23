@@ -67,6 +67,8 @@ def preprocesar_datos_p5() -> str:
 
     CSV (comportamiento original sin cambios):
       - Limpia espacios, corrige formato invertido "Gomera, La",
+        normaliza artículo interno a minúscula ("Puerto de La Cruz"
+        → "Puerto de la Cruz") para coherencia con GeoJSON,
         sustituye separador decimal español, elimina columnas Unnamed/vacías.
 
     TSV — gini.tsv y rentas.tsv (lógica adicional):
@@ -100,9 +102,20 @@ def preprocesar_datos_p5() -> str:
                     df.loc[mask, col] = df.loc[mask, col].astype(str).str.strip()
                 except Exception:
                     pass
+                # Corregir formato invertido "Gomera, La" → "La Gomera"
                 df[col] = df[col].replace(
                     r"(?i)^([^,]+),\s*(La|El|Los|Las)$", r"\2 \1", regex=True
                 )
+                # Normalizar artículo interno a minúscula para coherencia
+                # con GeoJSON: "Puerto de La Cruz" → "Puerto de la Cruz"
+                # El lookbehind/lookahead evita tocar el artículo inicial:
+                # "La Orotava" → "La Orotava" (sin cambio)
+                if col in ("municipio", "Municipio"):
+                    df[col] = df[col].str.replace(
+                        r"(?<=\s)(La|El|Los|Las)(?=\s)",
+                        lambda m: m.group(0).lower(),
+                        regex=True
+                    )
                 df[col] = df[col].replace(r"^(-?\d+),(\d+)$", r"\1.\2", regex=True)
                 try:
                     df[col] = df[col].astype(float)
@@ -137,6 +150,12 @@ def preprocesar_datos_p5() -> str:
                 df["TERRITORIO"] = df["TERRITORIO"].replace(
                     r"(?i)^([^,]+),\s*(La|El|Los|Las)$", r"\2 \1", regex=True
                 )
+                # Normalizar artículo interno a minúscula
+                df["TERRITORIO"] = df["TERRITORIO"].str.replace(
+                    r"(?<=\s)(La|El|Los|Las)(?=\s)",
+                    lambda m: m.group(0).lower(),
+                    regex=True
+                )
 
             # 4. Deduplicar SC Tenerife (municipio vs provincia):
             #    keep='first' tras sort ascendente → valor más bajo = municipio
@@ -166,7 +185,6 @@ def preprocesar_datos_p5() -> str:
             logger.error(f"  ✗ {filename}: {e}")
 
     return processed_dir
-
 @asset(
     deps=[
         "plot_actividad_barras",
