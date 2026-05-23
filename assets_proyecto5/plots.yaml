@@ -27,3 +27,6 @@ expected_plots:
     asset_name: "plot_historico_tipos_contrato_por_edad"
   - filename: "ocupacion_divergente_canarias.png"
     asset_name: "plot_ocupacion_divergente_canarias"
+  - filename: "segregacion_sectorial_temporal.png"
+    asset_name: "plot_segregacion_sectorial_temporal"
+

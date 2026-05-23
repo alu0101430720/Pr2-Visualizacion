@@ -167,3 +167,12 @@ Este documento describe detalladamente la base teórica y técnica de cada una d
 #### `check_ocupacion_divergente_canarias`
 *   **Gestalt**: *Figura/Fondo*. Garantiza que el gráfico divergente del CNO-1 canario cuente con el ámbito geográfico y las variables necesarias para que el eje central de paridad de género actúe como ancla de fondo equilibrada.
 *   **Gramática de Gráficos**: *Coordenadas Invertidas (`coord_flip`)*. Valida el correcto despliegue de las barras de desviación a ambos lados del cero.
+
+#### `check_datos_segregacion_sectorial_temporal` (Tendencia Temporal de Segregación)
+*   **Gestalt**:
+    *   *Continuidad*: La línea temporal guía la mirada del lector de izquierda a derecha. Si hay huecos temporales o saltos significativos, la trayectoria se rompe introduciendo pendientes falsas.
+    *   *Similitud*: El color de la línea se mantiene coherente con el Cleveland Dotplot para cada sector económico usando la paleta cualitativa `Dark2`.
+    *   *Figura/Fondo*: La línea de paridad (50%) funciona como un fondo estructural neutro contra el cual la figura (las áreas de dominancia masculina en azul y femenina en rosa) destaca de forma nítida e intuitiva.
+    *   *Región Común*: La línea vertical de la Reforma Laboral de 2022 divide espacialmente la visualización en dos regiones (pre y post reforma) para evaluar visualmente el impacto del cambio regulatorio.
+*   **Gramática de Gráficos**: *Facetas (Facets) / Mapeo de Color*. Mapea la posición temporal en el eje X, el ratio de género en el eje Y y el color discreto por sector. Faceta el conjunto de datos por actividad económica (`actividad_short`) distribuyendo las series temporales en subgráficos paralelos de escala y límites compartidos para una comparación directa.
+

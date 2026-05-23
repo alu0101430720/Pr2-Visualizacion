@@ -197,6 +197,7 @@ def preprocesar_datos_p5() -> str:
         "plot_brecha_temporal_edad",
         "plot_historico_tipos_contrato_por_edad",
         "plot_ocupacion_divergente_canarias",
+        "plot_segregacion_sectorial_temporal",
     ],
     group_name="publicacion",
     description=(

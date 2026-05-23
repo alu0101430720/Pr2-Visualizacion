@@ -1565,3 +1565,270 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
         "año":    MetadataValue.int(AÑO),
         "plot":   MetadataValue.md(f"![Ocupación {AMBITO}]({out})"),
     })
+
+
+@asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
+def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
+    """
+    Serie temporal del ratio H/(H+M) por sector económico — Canarias 2019-2026.
+    Muestra cómo evoluciona la segregación de género en cada actividad mes a mes,
+    con la reforma laboral de 2022 como referencia.
+
+    Gramática de gráficos:
+      - Canal principal: posición en eje Y (ratio H/(H+M))
+      - Canal secundario: color por sector (Dark2 de ColorBrewer)
+      - Eje X: tiempo (año-mes)
+      - Facet por sector: una línea por sector en panel propio
+
+    Gestalt:
+      - Continuidad: línea temporal guía la lectura izquierda→derecha
+      - Similitud: color por sector coherente con dotplot
+      - Figura/Fondo: línea de paridad en 0.5 como fondo estructural
+      - Región común: línea de reforma laboral divide pre/post 2022
+    """
+    cfg     = get_plot_config().get("segregacion_sectorial_temporal", {})
+    TOP_N   = cfg.get("top_n", 8)
+    AMBITO  = cfg.get("ambito", "Canarias")
+    ANO_INI = cfg.get("ano_ini", 2019)
+    MES_INI = cfg.get("mes_ini", 1)
+    ANO_FIN = cfg.get("ano_fin", 2026)
+    MES_FIN = cfg.get("mes_fin", 3)
+
+    ABREV = {
+        "Producción cinematográfica, de vídeo y de programas de televisión, "
+        "grabación de sonido y edición musical":                 "Prod. audiovisual",
+        "Servicios a edificios y actividades de jardinería":     "Servicios a edificios",
+        "Actividades de construcción especializada":             "Construcción esp.",
+        "Administración pública y defensa; seguridad social obligatoria": "Adm. pública",
+        "Actividades de creación artística y artes escénicas":   "Artes escénicas",
+        "Actividades sanitarias":                                "Sanidad",
+        "Servicios de alojamiento":                              "Alojamiento",
+        "Servicios de comidas y bebidas":                        "Hostelería",
+        "Comercio al por menor":                                 "Comercio minorista",
+        "Comercio al por mayor":                                 "Comercio mayorista",
+        "Educación":                                             "Educación",
+        "Construcción de edificios":                             "Construcción",
+        "Agricultura, ganadería, caza y servicios relacionados": "Agricultura",
+        "Transporte terrestre y por tubería":                    "Transporte",
+        "Actividades deportivas, recreativas y de entretenimiento": "Deporte/recreación",
+        "Asistencia en establecimientos residenciales":          "Asist. residencial",
+        "Actividades de servicios sociales sin alojamiento":     "Servicios sociales",
+    }
+
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+
+    # ── Asegurar preprocesamiento y carga de todos los meses en processed/ ───
+    for ano in range(ANO_INI, ANO_FIN + 1):
+        get_processed_contratos(ano)
+
+    processed_dir = os.path.join(data_dir, "processed")
+    ficheros = sorted(
+        glob.glob(os.path.join(processed_dir, "contratos_registrados_*.csv")) +
+        glob.glob(os.path.join(processed_dir, "contratos_202*.csv")) +
+        glob.glob(os.path.join(processed_dir, "contratos20*.csv"))
+    )
+
+    if not ficheros:
+        context.log.warning("No se encontraron ficheros de contratos preprocesados.")
+        return
+
+    dfs = []
+    for fpath in ficheros:
+        fname = os.path.basename(fpath)
+
+        # 1. Caso anual (ej. contratos2019.csv)
+        m_anual = re.match(r"contratos(\d{4})\.csv", fname)
+        if m_anual:
+            año_fichero = int(m_anual.group(1))
+            if año_fichero < ANO_INI or año_fichero > ANO_FIN:
+                continue
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                    l1 = fh.readline()
+                sep = ";" if l1.count(";") > l1.count(",") else ","
+                df = pd.read_csv(fpath, sep=sep)
+                df.columns = df.columns.str.strip()
+                for col in df.select_dtypes(include="object").columns:
+                    df[col] = df[col].str.strip()
+                
+                # Normalizar columna de contratos
+                col_c = next((c for c in df.columns if c.lower() in ("contratos", "c")), None)
+                if col_c:
+                    df = df.rename(columns={col_c: "Contratos"})
+                
+                if "fecha" in df.columns:
+                    df = df.dropna(subset=["fecha"])
+                    df["año"] = (df["fecha"] * 10).astype(int)
+                    df["mes"] = np.round((df["fecha"] * 10 - df["año"]) * 100).astype(int)
+                    df = df[df["año"] == año_fichero]
+                    dfs.append(df)
+            except Exception as e:
+                context.log.warning(f"Error cargando {fname}: {e}")
+            continue
+
+        # 2. Caso mensual (ej. contratos_202512.csv)
+        m = re.search(r"(\d{4})(\d{2})", fname)
+        if not m:
+            continue
+        año, mes = int(m.group(1)), int(m.group(2))
+        if año < ANO_INI or año > ANO_FIN:
+            continue
+        try:
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                l1 = fh.readline()
+            sep = ";" if l1.count(";") > l1.count(",") else ","
+            df = pd.read_csv(fpath, sep=sep)
+            df.columns = df.columns.str.strip()
+            for col in df.select_dtypes(include="object").columns:
+                df[col] = df[col].str.strip()
+            df["año"] = año
+            df["mes"] = mes
+            col_c = next((c for c in df.columns if c.lower() in ("contratos", "c")), None)
+            if col_c:
+                df = df.rename(columns={col_c: "Contratos"})
+            dfs.append(df)
+        except Exception as e:
+            context.log.warning(f"Error cargando {fname}: {e}")
+
+    if not dfs:
+        context.log.warning("Sin datos mensuales válidos.")
+        return
+
+    df_all = pd.concat(dfs, ignore_index=True)
+
+    # Filtrar ámbito
+    if AMBITO != "Canarias" and "isla" in df_all.columns:
+        df_all = df_all[df_all["isla"].str.upper() == AMBITO.upper()]
+
+    df_all = df_all[df_all["sexo"].isin(["Hombres", "Mujeres"])]
+    df_all["fecha"] = pd.to_datetime(
+        df_all["año"].astype(str) + "-" + df_all["mes"].astype(str).str.zfill(2),
+        format="%Y-%m"
+    )
+
+    # Filtrar rango temporal exacto
+    fecha_ini = pd.Timestamp(f"{ANO_INI}-{MES_INI:02d}-01")
+    fecha_fin = pd.Timestamp(f"{ANO_FIN}-{MES_FIN:02d}-01")
+    df_all = df_all[(df_all["fecha"] >= fecha_ini) & (df_all["fecha"] <= fecha_fin)]
+
+    if df_all.empty:
+        context.log.warning("Sin datos tras aplicar el filtro temporal.")
+        return
+
+    # ── Seleccionar top N sectores por volumen total ──────────────────────────
+    top_act = (df_all.groupby("Actividad económica")["Contratos"]
+               .sum().nlargest(TOP_N).index.tolist())
+
+    df_top = df_all[df_all["Actividad económica"].isin(top_act)].copy()
+    df_top["actividad_short"] = df_top["Actividad económica"].map(ABREV).fillna(
+        df_top["Actividad económica"].str[:25])
+
+    # ── Calcular ratio H/(H+M) por sector y mes ───────────────────────────────
+    pivot = (
+        df_top.groupby(["fecha", "actividad_short", "sexo"])["Contratos"]
+        .sum().unstack("sexo").reset_index()
+    )
+    pivot.columns.name = None
+    for col in ["Hombres", "Mujeres"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+    pivot[["Hombres", "Mujeres"]] = pivot[["Hombres", "Mujeres"]].fillna(0)
+    pivot["total"] = pivot["Hombres"] + pivot["Mujeres"]
+    # Filtrar meses con masa insuficiente
+    MIN_CONTRATOS = cfg.get("min_contratos", 30)
+    pivot = pivot[pivot["total"] >= MIN_CONTRATOS].copy()
+    
+    if pivot.empty:
+        context.log.warning("Sin datos de segregación tras aplicar el filtro de contratos mínimos.")
+        return
+
+    pivot["ratio_hm"] = pivot["Hombres"] / pivot["total"]
+
+    # Ordenar sectores por ratio medio (más masculinizados abajo)
+    orden_act = (pivot.groupby("actividad_short")["ratio_hm"]
+                 .mean().sort_values(ascending=False).index.tolist())
+
+    # ── Paleta Dark2 por sector ───────────────────────────────────────────────
+    cmap = plt.get_cmap("Dark2")
+    colores = {act: mcolors.to_hex(cmap(i % 8))
+               for i, act in enumerate(orden_act)}
+
+    # ── Plot: facet por sector, una fila por sector ───────────────────────────
+    n_act  = len(orden_act)
+    ncols  = 2
+    nrows  = (n_act + 1) // ncols
+    fig, axes = plt.subplots(nrows, ncols,
+                             figsize=(14, nrows * 2.2),
+                             sharex=True, sharey=True)
+    axes_flat = axes.flatten()
+    fig.patch.set_facecolor("white")
+
+    fecha_reforma = pd.Timestamp("2022-01-01")
+
+    for idx, act in enumerate(orden_act):
+        ax  = axes_flat[idx]
+        sub = pivot[pivot["actividad_short"] == act].sort_values("fecha")
+        col = colores[act]
+
+        ax.set_facecolor("white")
+        ax.axhline(0.5, color="#cccccc", lw=1.2, ls="--", zorder=1)
+        ax.axvline(fecha_reforma, color="#888888", lw=1.0, ls=":", zorder=2)
+
+        ax.plot(sub["fecha"], sub["ratio_hm"],
+                color=col, lw=2.0, zorder=3)
+        ax.fill_between(sub["fecha"], sub["ratio_hm"], 0.5,
+                        where=sub["ratio_hm"] >= 0.5,
+                        alpha=0.15, color="#4A90D9", zorder=2)
+        ax.fill_between(sub["fecha"], sub["ratio_hm"], 0.5,
+                        where=sub["ratio_hm"] < 0.5,
+                        alpha=0.15, color="#D94A8C", zorder=2)
+
+        ax.set_ylim(0.0, 1.0)
+        ax.set_yticks([0.25, 0.5, 0.75])
+        ax.set_yticklabels(["25%", "50%", "75%"], fontsize=7.5)
+        ax.yaxis.grid(True, color="#eeeeee", zorder=0)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.tick_params(axis="x", length=0)
+
+        # Título del panel con color del sector
+        ax.set_title(act, fontsize=9, fontweight="bold",
+                     color=col, pad=4)
+
+        # Anotar reforma solo en el primer panel
+        if idx == 0 and sub["fecha"].min() < fecha_reforma < sub["fecha"].max():
+            ax.text(fecha_reforma + pd.Timedelta(days=30), 0.92,
+                    "Ref. Laboral", fontsize=7, color="#888888",
+                    style="italic", va="top")
+
+    # Ocultar paneles sobrantes
+    for idx in range(n_act, len(axes_flat)):
+        axes_flat[idx].set_visible(False)
+
+    # Eje X compartido: etiquetas de año
+    for ax in axes_flat[:n_act]:
+        if ax.get_subplotspec().is_last_row() or idx == n_act - 1:
+            ax.xaxis.set_major_formatter(
+                plt.matplotlib.dates.DateFormatter("%Y"))
+            ax.xaxis.set_major_locator(
+                plt.matplotlib.dates.YearLocator())
+            plt.setp(ax.get_xticklabels(), rotation=30,
+                     ha="right", fontsize=8)
+
+    fig.supylabel("% hombres contratados", fontsize=10, x=0.02)
+    fig.suptitle(
+        f"Evolución de la segregación de género por sector — "
+        f"{AMBITO} {ANO_INI}--{ANO_FIN}",
+        fontsize=13, fontweight="bold", y=1.01)
+    fig.text(
+        0.01, -0.01,
+        "Línea discontinua = paridad (50%)  ·  "
+        "Línea punteada = Reforma Laboral (ene. 2022)  ·  "
+        "Azul = mayoría hombres  ·  Rosa = mayoría mujeres  ·  "
+        "Fuente: SEPE / OBECAN",
+        fontsize=8, color="#666666")
+
+    plt.tight_layout(rect=[0.03, 0.02, 1, 1])
+    out = os.path.join(get_plot_dir(), "segregacion_sectorial_temporal.png")
+    fig.savefig(out, dpi=150)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Segregación temporal]({out})")})

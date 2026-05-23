@@ -144,3 +144,16 @@ historico_tipos_contrato:
   ano_fin: 2026
   # mes_fin: Mes de corte para el dato del último año. Opciones: 1 a 12.
   mes_fin: 3
+
+segregacion_sectorial_temporal:
+  # top_n: Número de actividades más representativas a mostrar en el panel (ej. 8).
+  top_n: 8
+  # ambito: Ámbito geográfico del filtro ("Canarias", "Tenerife", etc.)
+  ambito: "Canarias"
+  # min_contratos: Masa mínima por celda sector×mes para calcular el ratio
+  min_contratos: 30
+  # Rango temporal de la serie (Opciones: 2019 a 2026, mes 1 a 12)
+  ano_ini: 2019
+  mes_ini: 1
+  ano_fin: 2026
+  mes_fin: 3

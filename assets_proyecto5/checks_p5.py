@@ -29,6 +29,7 @@ from plots_assets import (
     _load_rentas,
     _load_gini,
     plot_ocupacion_divergente_canarias,
+    plot_segregacion_sectorial_temporal,
     _cargar_contratos,
     _filtrar_ambito,
     _islas_en_ambito,
@@ -153,6 +154,7 @@ PNG_ESPERADOS = [
     "historico_temp_parcial.png",
     "historico_conversion.png",
     "ocupacion_divergente_canarias.png",
+    "segregacion_sectorial_temporal.png",
 ]
 
 def _png_esperados_dinamicos() -> list[str]:
@@ -2102,4 +2104,105 @@ def check_ocupacion_divergente_canarias(context):
     return AssetCheckResult(
         passed=bool(passed), severity=AssetCheckSeverity.WARN,
         metadata={"check": MetadataValue.md(md)},
+    )
+
+
+@asset_check(
+    asset=plot_segregacion_sectorial_temporal,
+    description="Verifica que hay suficientes meses y datos de género en los sectores para la serie temporal de segregación.",
+)
+def check_datos_segregacion_sectorial_temporal(context):
+    """
+    Gestalt — Continuidad: requiere una secuencia temporal sin huecos significativos para evitar líneas falsas.
+    Gestalt — Similitud: color coherente por sector con la paleta Dark2.
+    """
+    passed = True
+    report_md = "### Check: segregacion_sectorial_temporal\n\n"
+
+    try:
+        cfg = get_plot_config().get("segregacion_sectorial_temporal", {})
+    except Exception as e:
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md(f"🔴 Error leyendo config: {e}")})
+
+    TOP_N = cfg.get("top_n", 8)
+    AMBITO = cfg.get("ambito", "Canarias")
+    MIN_CONTRATOS = cfg.get("min_contratos", 30)
+    ANO_INI = cfg.get("ano_ini", 2019)
+    MES_INI = cfg.get("mes_ini", 1)
+    ANO_FIN = cfg.get("ano_fin", 2026)
+    MES_FIN = cfg.get("mes_fin", 3)
+
+    report_md += f"**Configuración**: `top_n={TOP_N}`, `ambito={AMBITO!r}`, `min_contratos={MIN_CONTRATOS}`, `rango={ANO_INI}/{MES_INI:02d}-{ANO_FIN}/{MES_FIN:02d}`\n\n"
+
+    # Buscar archivos mensuales y anuales
+    data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
+    processed_dir = os.path.join(data_dir, "processed")
+    ficheros = sorted(
+        glob.glob(os.path.join(processed_dir, "contratos_registrados_*.csv")) +
+        glob.glob(os.path.join(processed_dir, "contratos_202*.csv")) +
+        glob.glob(os.path.join(processed_dir, "contratos20*.csv"))
+    )
+
+    ficheros_filtrados = []
+    for fpath in ficheros:
+        fname = os.path.basename(fpath)
+        m_anual = re.match(r"contratos(\d{4})\.csv", fname)
+        if m_anual:
+            a = int(m_anual.group(1))
+            if ANO_INI <= a <= ANO_FIN:
+                ficheros_filtrados.append(fpath)
+            continue
+        m = re.search(r"(\d{4})(\d{2})", fname)
+        if m:
+            a = int(m.group(1))
+            if ANO_INI <= a <= ANO_FIN:
+                ficheros_filtrados.append(fpath)
+
+    if not ficheros_filtrados:
+        return AssetCheckResult(
+            passed=False, severity=AssetCheckSeverity.WARN,
+            metadata={"check": MetadataValue.md("🔴 No se encontraron ficheros de contratos preprocesados en el rango temporal.")})
+
+    n_ficheros = len(ficheros_filtrados)
+    ok_ficheros = n_ficheros >= 4
+    passed = passed and ok_ficheros
+    report_md += f"- Ficheros de contratos en el rango temporal (≥ 4): {'🟢' if ok_ficheros else '🔴'} ({n_ficheros} ficheros)\n"
+
+    # Cargar y verificar una muestra o agregación simple para ver consistencia de campos
+    try:
+        dfs = []
+        ficheros_mensuales = [f for f in ficheros_filtrados if not re.match(r"contratos\d{4}\.csv", os.path.basename(f))]
+        ficheros_a_muestrar = ficheros_mensuales if ficheros_mensuales else ficheros_filtrados
+        for fpath in ficheros_a_muestrar[:5]:  # Muestra representativa de los primeros 5 para rapidez
+            with open(fpath, "r", encoding="utf-8", errors="ignore") as fh:
+                l1 = fh.readline()
+            sep = ";" if l1.count(";") > l1.count(",") else ","
+            df = pd.read_csv(fpath, sep=sep, nrows=25000)
+            df.columns = df.columns.str.strip()
+            for col in df.select_dtypes(include="object").columns:
+                df[col] = df[col].str.strip()
+            col_c = next((c for c in df.columns if c.lower() in ("contratos", "c")), None)
+            if col_c:
+                df = df.rename(columns={col_c: "Contratos"})
+            dfs.append(df)
+        df_sample = pd.concat(dfs, ignore_index=True)
+
+        cols_ok = {"Actividad económica", "sexo", "Contratos"}.issubset(df_sample.columns)
+        passed = passed and cols_ok
+        report_md += f"- Columnas requeridas (`Actividad económica`, `sexo`, `Contratos`): {'🟢' if cols_ok else '🔴'}\n"
+
+        sexos = set(df_sample["sexo"].dropna().unique())
+        ok_sexo = {"Hombres", "Mujeres"}.issubset(sexos)
+        passed = passed and ok_sexo
+        report_md += f"- Ambos sexos presentes en los datos: {'🟢' if ok_sexo else '🔴'}\n"
+    except Exception as e:
+        passed = False
+        report_md += f"- Error analizando muestra de datos: 🔴 {e}\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"check": MetadataValue.md(report_md)},
     )
