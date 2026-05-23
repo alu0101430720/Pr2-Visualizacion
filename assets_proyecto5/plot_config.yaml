@@ -143,7 +143,7 @@ segregacion_sectorial:
   # top_n: Número de actividades más representativas a mostrar en el dotplot (ej. 15).
   top_n: 15
   # min_contratos: Masa crítica requerida en la celda actividad-isla para calcular ratio (ej. 15).
-  min_contratos: 15
+  min_contratos: 1
   # ano / mes: Año y mes de contratos.
   # Opciones de año de 2019 a 2026
   # Opciones de mes de 1 a 12
