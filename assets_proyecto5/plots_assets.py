@@ -403,9 +403,7 @@ def plot_brecha_salarial(context: AssetExecutionContext) -> None:
         + coord_flip()
         + labs(
             title="Municipios con mayor cambio en brecha salarial de género",
-            subtitle=(f"Δ índice entre {AÑO_INI} y {AÑO_FIN} · "
-                      f"Top {TOP_N} por variación absoluta · "
-                      f"+ = brecha aumenta  /  − = brecha disminuye"),
+            subtitle="SC de Tenerife (2021-2023)",
             x="", y="Cambio en índice de brecha salarial",
             caption="Fuente: ISTAC · ocupacion-sc-3 + distribucion-renta-ingresos",
         )

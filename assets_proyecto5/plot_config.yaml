@@ -68,7 +68,7 @@ brecha_salarial:
   n_anotaciones_mapa: 3
   # nivel: Nivel espacial de detalle a dibujar en el mapa coroplético.
   # Opciones: 
-  #   "seccion"   → (Enfoque A) Muestra las secciones censales coloreadas por el valor de su municipio.
+  #   "seccion"   → Muestra las secciones censales coloreadas por el valor de su municipio.
   #   "municipio" → Muestra las divisiones agrupadas de forma consolidada por municipios.
   nivel: "seccion"
 
