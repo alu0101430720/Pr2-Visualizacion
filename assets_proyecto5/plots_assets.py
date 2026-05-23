@@ -532,7 +532,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     cfg   = get_plot_config().get("heatmap_segregacion", {})
     TOP_N = cfg.get("top_n", 15)
 
-    df = pd.read_csv(get_processed_path("contratos_202603.csv"))
+    df = pd.read_csv(get_processed_path("contratos_202512.csv"))
     df.columns = df.columns.str.strip()
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].str.strip()
