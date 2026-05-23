@@ -610,7 +610,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
       - Similitud: color por isla coherente con el resto del proyecto
       - Figura/Fondo: línea gris clara de fondo, puntos de color en primer plano
     """
-    cfg   = get_plot_config().get("heatmap_segregacion", {})
+    cfg   = get_plot_config().get("segregacion_sectorial", {})
     TOP_N = cfg.get("top_n", 15)
     AÑO   = cfg.get("ano", 2026)
     MES   = cfg.get("mes", 3)

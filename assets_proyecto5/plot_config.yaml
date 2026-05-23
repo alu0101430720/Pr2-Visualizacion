@@ -97,7 +97,7 @@ ocupacion_divergente_canarias:
 mapa_feminizacion_municipios:
   ambito: "Canarias"
 
-heatmap_segregacion:
+segregacion_sectorial:
   top_n: 15
   min_contratos: 15
   ano: 2025

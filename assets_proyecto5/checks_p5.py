@@ -1358,7 +1358,7 @@ def check_datos_segregacion_sectorial(context):
     passed   = True
     report_md = "### Check: segregacion_sectorial_dotplot\n\n"
 
-    cfg = get_plot_config().get("heatmap_segregacion", {})
+    cfg = get_plot_config().get("segregacion_sectorial", {})
     AÑO = cfg.get("ano", 2025)
     MES = cfg.get("mes", 12)
     
@@ -1383,7 +1383,7 @@ def check_datos_segregacion_sectorial(context):
     passed = passed and ok
     report_md += f"- 7 islas presentes: {'🟢' if ok else '🔴'} (faltan: {faltantes or '–'})\n"
 
-    cfg   = get_plot_config().get("heatmap_segregacion", {})
+    cfg   = get_plot_config().get("segregacion_sectorial", {})
     TOP_N = cfg.get("top_n", 15)
     top_act = (df.groupby("Actividad económica")["Contratos"]
                .sum().nlargest(TOP_N).index.tolist())
