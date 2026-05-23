@@ -196,7 +196,7 @@ def cargar_gdf_municipios(año: int, nivel: str = "municipio",
     if nivel == "municipio":
         return gdf.dissolve(by="municipio", as_index=False)[["municipio", "geometry"]]
     else:
-        return gdf[["municipio", "geometry"]].copy()
+        return gdf[["municipio", "geocode", "geometry"]].copy()
 
 
 def _calcular_indice_brecha(ocu: pd.DataFrame,
@@ -223,6 +223,28 @@ def _calcular_indice_brecha(ocu: pd.DataFrame,
     )
 
     merged = ocu_hm.merge(sal, on=["municipio", "año"], how="inner")
+    merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
+    return merged
+
+
+def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
+                                     dist: pd.DataFrame) -> pd.DataFrame:
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(["seccion_key", "año", "sexo"], as_index=False)["num_casos"].sum()
+        .pivot(index=["seccion_key", "año"], columns="sexo", values="num_casos")
+        .reset_index()
+    )
+    ocu_hm.columns.name = None
+    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
+
+    sal = (
+        dist[dist["MEDIDAS_CODE"] == "SUELDOS_SALARIOS"]
+        .groupby(["seccion_key", "año"], as_index=False)["OBS_VALUE"].median()
+        .rename(columns={"OBS_VALUE": "pct_salarios"})
+    )
+
+    merged = ocu_hm.merge(sal, on=["seccion_key", "año"], how="inner")
     merged["indice_brecha"] = (merged["ratio_hm"] - 0.5) * merged["pct_salarios"]
     return merged
 
@@ -436,6 +458,7 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     """
     cfg      = get_plot_config()["brecha_salarial"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
+    NIVEL    = cfg.get("nivel", "municipio")
 
     cmap_mapa = LinearSegmentedColormap.from_list(
         "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
@@ -444,7 +467,14 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
     dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
 
-    merged = _calcular_indice_brecha(ocu, dist)
+    if NIVEL == "seccion":
+        ocu = ocu.copy()
+        ocu["seccion_key"] = ocu["geocode"].astype(str).str.split("_", n=1).str[1]
+        dist = dist.copy()
+        dist["seccion_key"] = dist["TERRITORIO_CODE"].astype(str).str.split("_", n=1).str[1]
+        merged = _calcular_indice_brecha_seccion(ocu, dist)
+    else:
+        merged = _calcular_indice_brecha(ocu, dist)
 
     lim = max(abs(merged["indice_brecha"].min()), abs(merged["indice_brecha"].max()))
     if lim == 0:
@@ -452,7 +482,6 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     else:
         norm = mcolors.TwoSlopeNorm(vmin=-lim, vcenter=0, vmax=lim)
 
-    NIVEL   = cfg.get("nivel", "municipio")
     gdf_mun = cargar_gdf_municipios(AÑO_MAPA, NIVEL, context.log)
     fig, ax = plt.subplots(figsize=(12, 8))
 
@@ -460,23 +489,39 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         ax.set_title(f"{AÑO_MAPA} - Sin Datos Espaciales")
         ax.axis("off")
     else:
-        datos = merged[merged["año"] == AÑO_MAPA][["municipio", "indice_brecha"]].copy()
-
-        # Join con clave en minúsculas para evitar discrepancias de capitalización
-        datos["_key"] = datos["municipio"].str.lower()
-        gdf_p         = gdf_mun.copy()
-        gdf_p["_key"] = gdf_p["municipio"].str.lower()
-        gdf_p         = gdf_p.merge(
-            datos[["_key", "indice_brecha"]], on="_key", how="left"
-        ).drop(columns=["_key"])
-
-        # Diagnóstico
-        sin_dato = gdf_p[gdf_p["indice_brecha"].isna()]["municipio"].unique()
-        if len(sin_dato) > 0:
-            context.log.warning(
-                f"Municipios sin índice tras join ({len(sin_dato)}): "
-                f"{sorted(sin_dato)}"
+        if NIVEL == "seccion":
+            datos = merged[merged["año"] == AÑO_MAPA][["seccion_key", "indice_brecha"]].copy()
+            gdf_p = gdf_mun.copy()
+            gdf_p["seccion_key"] = gdf_p["geocode"].astype(str).str.split("_", n=1).str[1]
+            gdf_p = gdf_p.merge(
+                datos[["seccion_key", "indice_brecha"]], on="seccion_key", how="left"
             )
+
+            # Diagnóstico
+            sin_dato = gdf_p[gdf_p["indice_brecha"].isna()]["seccion_key"].unique()
+            if len(sin_dato) > 0:
+                context.log.warning(
+                    f"Secciones sin índice tras join ({len(sin_dato)}): "
+                    f"{sorted(sin_dato)}"
+                )
+        else:
+            datos = merged[merged["año"] == AÑO_MAPA][["municipio", "indice_brecha"]].copy()
+
+            # Join con clave en minúsculas para evitar discrepancias de capitalización
+            datos["_key"] = datos["municipio"].str.lower()
+            gdf_p         = gdf_mun.copy()
+            gdf_p["_key"] = gdf_p["municipio"].str.lower()
+            gdf_p         = gdf_p.merge(
+                datos[["_key", "indice_brecha"]], on="_key", how="left"
+            ).drop(columns=["_key"])
+
+            # Diagnóstico
+            sin_dato = gdf_p[gdf_p["indice_brecha"].isna()]["municipio"].unique()
+            if len(sin_dato) > 0:
+                context.log.warning(
+                    f"Municipios sin índice tras join ({len(sin_dato)}): "
+                    f"{sorted(sin_dato)}"
+                )
 
         tiene_indice = gdf_p["indice_brecha"].notna()
 
@@ -509,8 +554,9 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
     cbar.ax.text(0.5, 1.02, "hombres", transform=cbar.ax.transAxes,
                  ha="center", va="bottom", fontsize=8, color="#4A90D9")
 
+    nivel_label = "sección censal" if NIVEL == "seccion" else "municipio"
     fig.suptitle(
-        f"Brecha salarial de género por municipio — SC. de Tenerife {AÑO_MAPA}",
+        f"Brecha salarial de género por {nivel_label} — SC. de Tenerife {AÑO_MAPA}",
         fontsize=15, fontweight="bold", y=0.95)
     fig.text(
         0.5, 0.01,

@@ -851,14 +851,15 @@ def check_datos_mapa_brecha(context):
     """
     Gestalt — Cierre: TwoSlopeNorm requiere valores + y − en el índice; si
     todos son positivos matplotlib lanza un error y el mapa no se genera.
-    Gestalt — Figura/Fondo: municipios con geometría vacía tras dissolve
-    producen centroides NaN y las anotaciones directas en el mapa fallan.
+    Gestalt — Figura/Fondo: municipios/secciones con geometría vacía o inválida
+    impiden el correcto dibujado y la asignación del mapa de color.
     """
     cfg      = get_plot_config()["brecha_salarial"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
     N_ANOT   = cfg.get("n_anotaciones_mapa", 3)
+    NIVEL    = cfg.get("nivel", "municipio")
     passed = True
-    report_md = f"### Precondiciones: mapa_brecha_salarial (año={AÑO_MAPA})\n\n"
+    report_md = f"### Precondiciones: mapa_brecha_salarial (año={AÑO_MAPA}, nivel={NIVEL})\n\n"
 
     gjson = get_geojson_path(f"secciones_{AÑO_MAPA}0101_tenerife.json")
     ok    = os.path.exists(gjson)
@@ -869,27 +870,51 @@ def check_datos_mapa_brecha(context):
         try:
             gdf = gpd.read_file(gjson).set_crs("EPSG:4326", allow_override=True)
             gdf["municipio"] = gdf["etiqueta"].str.extract(r"- (.+)$")
-            gdf_d = gdf.dissolve(by="municipio", as_index=False)
-            n_mun = int(gdf_d["municipio"].nunique())
-            ok2   = n_mun >= 30
-            passed = passed and ok2
-            report_md += f"- Municipios tras dissolve ≥ 30: {'🟢' if ok2 else '🔴'} ({n_mun})\n"
+            
+            if NIVEL == "seccion":
+                n_sec = len(gdf)
+                ok2 = n_sec >= 100
+                passed = passed and ok2
+                report_md += f"- Secciones en GeoJSON ≥ 100: {'🟢' if ok2 else '🔴'} ({n_sec})\n"
+                
+                inv = int((~gdf.geometry.is_valid).sum())
+                ok3 = inv == 0
+                passed = passed and ok3
+                report_md += f"- Geometrías de secciones válidas: {'🟢' if ok3 else '🔴'} ({inv} inválidas)\n"
+            else:
+                gdf_d = gdf.dissolve(by="municipio", as_index=False)
+                n_mun = int(gdf_d["municipio"].nunique())
+                ok2   = n_mun >= 30
+                passed = passed and ok2
+                report_md += f"- Municipios tras dissolve ≥ 30: {'🟢' if ok2 else '🔴'} ({n_mun})\n"
 
-            inv = int((~gdf_d.geometry.is_valid).sum())
-            ok3 = inv == 0
-            passed = passed and ok3
-            report_md += f"- Geometrías válidas: {'🟢' if ok3 else '🔴'} ({inv} inválidas)\n"
+                inv = int((~gdf_d.geometry.is_valid).sum())
+                ok3 = inv == 0
+                passed = passed and ok3
+                report_md += f"- Geometrías válidas: {'🟢' if ok3 else '🔴'} ({inv} inválidas)\n"
 
-            # Centroides calculables para las anotaciones
-            centroides_nan = int(gdf_d.geometry.centroid.isna().sum())
-            ok4 = centroides_nan == 0
-            passed = passed and ok4
-            report_md += f"- Centroides calculables ({N_ANOT} anotaciones): {'🟢' if ok4 else '🔴'} ({centroides_nan} NaN)\n"
+                # Centroides calculables para las anotaciones
+                centroides_nan = int(gdf_d.geometry.centroid.isna().sum())
+                ok4 = centroides_nan == 0
+                passed = passed and ok4
+                report_md += f"- Centroides calculables ({N_ANOT} anotaciones): {'🟢' if ok4 else '🔴'} ({centroides_nan} NaN)\n"
         except Exception as e:
             report_md += f"- Error GeoJSON: ⚠️ {e}\n"
 
-    merged  = _indice_brecha(cfg)
-    idx_año = merged[merged["año"] == AÑO_MAPA]["indice"]
+    if NIVEL == "seccion":
+        ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"]).copy()
+        dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"]).copy()
+        ocu["seccion_key"] = ocu["geocode"].astype(str).str.split("_", n=1).str[1]
+        dist["seccion_key"] = dist["TERRITORIO_CODE"].astype(str).str.split("_", n=1).str[1]
+        
+        from plots_assets import _calcular_indice_brecha_seccion
+        merged = _calcular_indice_brecha_seccion(ocu, dist)
+        idx_col = "indice_brecha"
+    else:
+        merged  = _indice_brecha(cfg)
+        idx_col = "indice"
+
+    idx_año = merged[merged["año"] == AÑO_MAPA][idx_col]
     ok = bool((idx_año > 0).any()) and bool((idx_año < 0).any())
     passed = passed and ok
     report_md += f"- TwoSlopeNorm viable (+ y − en {AÑO_MAPA}): {'🟢' if ok else '🔴'}\n"
