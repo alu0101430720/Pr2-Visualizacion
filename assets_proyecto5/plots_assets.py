@@ -1886,7 +1886,6 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
 
         ax.set_facecolor("white")
         ax.axhline(0.5, color="#cccccc", lw=1.2, ls="--", zorder=1)
-        ax.axvline(fecha_reforma, color="#888888", lw=1.0, ls=":", zorder=2)
 
         ax.plot(sub["fecha"], sub["ratio_hm"], color=col, lw=2.0, zorder=3)
         ax.fill_between(sub["fecha"], sub["ratio_hm"], 0.5,
@@ -1903,11 +1902,6 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
         ax.spines[["top", "right"]].set_visible(False)
         ax.tick_params(axis="x", length=0)
         ax.set_title(act, fontsize=9, fontweight="bold", color=col, pad=4)
-
-        if idx == 0 and sub["fecha"].min() < fecha_reforma < sub["fecha"].max():
-            ax.text(fecha_reforma + pd.Timedelta(days=30), 0.92,
-                    "Ref. Laboral", fontsize=7, color="#888888",
-                    style="italic", va="top")
 
     for idx in range(n_act, len(axes_flat)):
         axes_flat[idx].set_visible(False)
@@ -1927,13 +1921,6 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
         f"Evolución de la segregación de género por sector — "
         f"{AMBITO} {ANO_INI}\u2013{ANO_FIN}",
         fontsize=13, fontweight="bold", y=0.99)
-    fig.text(
-        0.01, -0.01,
-        "Línea discontinua = paridad (50%)  ·  "
-        "Línea punteada = Reforma Laboral (ene. 2022)  ·  "
-        "Azul = mayoría hombres  ·  Rosa = mayoría mujeres  ·  "
-        "Fuente: SEPE / OBECAN",
-        fontsize=8, color="#666666")
 
     plt.tight_layout(rect=[0.03, 0.02, 1, 0.97])
     out = os.path.join(get_plot_dir(), "segregacion_sectorial_temporal.png")
