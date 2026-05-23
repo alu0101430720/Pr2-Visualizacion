@@ -819,7 +819,14 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     df = df.dropna(subset=["tc"])
 
     EDAD_ORDER     = ["Menor de 25", "Entre 25 y 44", "45 o más"]
-    TC_LABEL_ORDER = ["Temp. Parcial", "Temp. Completo", "Conversión", "Indefinido"]
+    
+    # Ordenar tipos de contrato por volumen total (magnitud)
+    orden_tc = (
+        df.groupby("tc")["Contratos"].sum()
+        .sort_values(ascending=False).index.tolist()
+    )
+    TC_LABEL_ORDER = [t for t in orden_tc if t in ["Temp. Parcial", "Temp. Completo", "Conversión", "Indefinido"]]
+    
     COLORS = {"Hombres": pal["H"], "Mujeres": pal["M"]}
 
     agg     = df.groupby(["edad", "tc", "sexo"])["Contratos"].sum().reset_index()
@@ -1023,6 +1030,13 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
                     ax.scatter(i26, vals[i26], s=45, color=COLORS[sexo],
                                marker="D", zorder=5, alpha=0.6,
                                edgecolors="white", linewidths=0.8)
+
+            if 2022 in AÑOS:
+                idx_22 = AÑOS.index(2022)
+                ax.axvline(idx_22, color="#888888", lw=0.9, ls="--", zorder=2, alpha=0.7)
+                ax.text(idx_22 - 0.08, 58, "Reforma Laboral",
+                        color="#666666", fontsize=7, rotation=90,
+                        ha="right", va="top", style="italic")
 
             ax.set_title(edad, fontsize=11, fontweight="bold",
                          pad=8, color="#333333")
