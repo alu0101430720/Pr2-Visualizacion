@@ -61,9 +61,9 @@ mapa_brecha_genero:
   # Opciones: 
   #   "seccion"   → Muestra las secciones censales coloreadas por el valor de su municipio.
   #   "municipio" → Muestra las divisiones agrupadas de forma consolidada por municipios.
-  nivel: "municipio"
+  nivel: "seccion"
   # modo_color: Modo de color del mapa. Opciones: "divergente" (rosa-blanco-azul, por defecto) o "secuencial" (blanco-purpura).
-  modo_color: "secuencial"
+  modo_color: "divergente"
   # simetrico: Forzar escala de color simétrica. Opciones: true (por defecto), false. Solo aplica en "divergente".
   simetrico: true
   # umbral_paridad: Umbral bajo el cual se fuerza automáticamente modo_color="secuencial" por falta de dominancia femenina. Por defecto 0.05.
