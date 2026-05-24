@@ -1,4 +1,4 @@
-# Proyecto Final — Visualización de la Estructura Laboral y Salarial de Canarias
+# Proyecto Final — Visualización de la Estructura Laboral de Canarias y SC de Tenerife
 
 Este repositorio contiene la implementación del pipeline de ingesta, preprocesamiento, control de calidad y generación de visualizaciones de alto impacto para analizar la estructura laboral, salarial y la brecha de género en la Comunidad Autónoma de Canarias.
 
