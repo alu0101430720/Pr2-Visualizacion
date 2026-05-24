@@ -11,8 +11,7 @@ from dagster import asset_check, AssetCheckResult, MetadataValue, AssetCheckSeve
 from assets import preprocesar_datos_p5, commitear_plots_a_github
 from plots_assets import (
     plot_actividad_barras,
-    plot_brecha_salarial,
-    plot_mapa_brecha_salarial,
+    plot_mapa_brecha_genero,
     get_processed_path,
     get_geojson_path,
     get_plot_config,
@@ -34,6 +33,7 @@ from plots_assets import (
     _filtrar_ambito,
     _islas_en_ambito,
     ISLAS_VALIDAS,
+    plot_brecha_genero,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -142,8 +142,7 @@ MAX_CHARS_ANOTACION_MAPA = 20  # nombre de municipio anotado sobre el mapa
 # Nombres canónicos de los PNG que deben existir tras la ejecución
 PNG_ESPERADOS = [
     "actividad_barras.png",
-    "brecha_salarial_lollipop.png",
-    "mapa_brecha_salarial.png",
+    "mapa_brecha_genero.png",
     "gini_evolucion_islas.png",
     "segregacion_sectorial_dotplot.png",
     "covid_sueldos_islas.png",
@@ -155,6 +154,7 @@ PNG_ESPERADOS = [
     "historico_conversion.png",
     "ocupacion_divergente_canarias.png",
     "segregacion_sectorial_temporal.png",
+    "brecha_genero_divergente.png",
 ]
 
 def _png_esperados_dinamicos() -> list[str]:
@@ -168,26 +168,7 @@ def inferir_isla(municipio: str) -> str:
     return "Desconocida"
 
 
-def _indice_brecha(cfg: dict) -> pd.DataFrame:
-    """Calcula el índice de brecha H/M ponderado por sueldos. Reutilizado en dos checks."""
-    ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-    dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
-    ocu_hm = (
-        ocu[ocu["sexo"].isin(SEXOS_ESPERADOS)]
-        .groupby(["municipio", "año", "sexo"])["num_casos"].sum()
-        .unstack("sexo").reset_index()
-    )
-    ocu_hm["ratio_hm"] = ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"])
-    
-    CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
-    sal = (
-        dist[dist["MEDIDAS_CODE"] == CATEGORIA]
-        .groupby(["municipio", "año"])["OBS_VALUE"].median()
-        .reset_index()
-    )
-    merged = ocu_hm.merge(sal, on=["municipio", "año"])
-    merged["indice"] = (merged["ratio_hm"] - 0.5) * merged["OBS_VALUE"]
-    return merged
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -788,80 +769,25 @@ def check_datos_actividad_barras(context):
         metadata={"Check_Actividad": MetadataValue.md(report_md)},
     )
 
-@asset_check(
-    asset=plot_brecha_salarial,
-    description="Precondiciones para plot_brecha_salarial (lollipop de delta).",
-)
-def check_datos_brecha_salarial(context):
-    """
-    Gestalt — Continuidad: si el join entre ocupacion y distribución falla por
-    nombres inconsistentes, los palos del lollipop desaparecen sin error
-    visible, dejando un gráfico vacío sin narrativa de cambio.
-    Gestalt — Proporcionalidad: municipios con pocos trabajadores tienen
-    ratios H/M inestables — un contrato cambia el índice varias décimas.
-    Gramática de gráficos: top_n < 3 no permite comparación; > 10 satura
-    el eje Y del lollipop horizontal.
-    """
-    cfg             = get_plot_config()["brecha_salarial"]
-    ocu             = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-    dist            = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"])
-    AÑO_INI, AÑO_FIN, TOP_N = cfg["ano_ini"], cfg["ano_fin"], cfg["top_n"]
-    passed = True
-    report_md = "### Precondiciones: brecha_salarial (lollipop)\n\n"
-
-    for df_tmp, nombre in [(ocu, "ocupacion"), (dist, "distribucion")]:
-        años = set(df_tmp["año"].dropna().unique())
-        ok   = {AÑO_INI, AÑO_FIN}.issubset(años)
-        passed = passed and ok
-        report_md += f"- `{nombre}` años {AÑO_INI}/{AÑO_FIN}: {'🟢' if ok else '🔴'} ({años})\n"
-
-    ok = "SUELDOS_SALARIOS" in set(dist["MEDIDAS_CODE"].dropna().unique())
-    passed = passed and ok
-    report_md += f"- SUELDOS_SALARIOS presente: {'🟢' if ok else '🔴'}\n"
-
-    comunes = set(ocu["municipio"].dropna().unique()) & set(dist["municipio"].dropna().unique())
-    ok = len(comunes) >= TOP_N
-    passed = passed and ok
-    report_md += f"- Municipios comunes ≥ {TOP_N}: {'🟢' if ok else '🔴'} ({len(comunes)})\n"
-
-    ok = SEXOS_ESPERADOS.issubset(set(ocu["sexo"].dropna().unique()))
-    passed = passed and ok
-    report_md += f"- Ambos sexos en ocupación: {'🟢' if ok else '🔴'}\n"
-
-    merged = _indice_brecha(cfg)
-    ok = bool((merged["indice"] > 0).any()) and bool((merged["indice"] < 0).any())
-    passed = passed and ok
-    report_md += f"- Índice con valores + y −: {'🟢' if ok else '🔴'}\n"
-
-    # top_n en rango visual útil [3, 10]
-    ok_rango = 3 <= TOP_N <= 10
-    passed = passed and ok_rango
-    report_md += f"- top_n en rango [3,10]: {'🟢' if ok_rango else '🔴'} ({TOP_N})\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Brecha": MetadataValue.md(report_md)},
-    )
 
 
 @asset_check(
-    asset=plot_mapa_brecha_salarial,
-    description="Precondiciones para plot_mapa_brecha_salarial.",
+    asset=plot_mapa_brecha_genero,
+    description="Precondiciones para plot_mapa_brecha_genero.",
 )
-def check_datos_mapa_brecha(context):
+def check_datos_mapa_brecha_genero(context):
     """
     Gestalt — Cierre: TwoSlopeNorm requiere valores + y − en el índice; si
     todos son positivos matplotlib lanza un error y el mapa no se genera.
     Gestalt — Figura/Fondo: municipios/secciones con geometría vacía o inválida
     impiden el correcto dibujado y la asignación del mapa de color.
     """
-    cfg      = get_plot_config()["brecha_salarial"]
+    cfg      = get_plot_config()["mapa_brecha_genero"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
     N_ANOT   = cfg.get("n_anotaciones_mapa", 3)
     NIVEL    = cfg.get("nivel", "municipio")
     passed = True
-    report_md = f"### Precondiciones: mapa_brecha_salarial (año={AÑO_MAPA}, nivel={NIVEL})\n\n"
+    report_md = f"### Precondiciones: mapa_brecha_genero (año={AÑO_MAPA}, nivel={NIVEL})\n\n"
 
     gjson = get_geojson_path(f"secciones_{AÑO_MAPA}0101_tenerife.json")
     ok    = os.path.exists(gjson)
@@ -903,34 +829,73 @@ def check_datos_mapa_brecha(context):
         except Exception as e:
             report_md += f"- Error GeoJSON: ⚠️ {e}\n"
 
-    if NIVEL == "seccion":
-        ocu  = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"]).copy()
-        dist = pd.read_csv(get_processed_path(cfg["dataset_dist"])).dropna(subset=["OBS_VALUE"]).copy()
-        ocu["seccion_key"] = ocu["geocode"].astype(str).str.split("_", n=1).str[1]
-        dist["seccion_key"] = dist["TERRITORIO_CODE"].astype(str).str.split("_", n=1).str[1]
-        
-        CATEGORIA = cfg.get("categoria_renta", "SUELDOS_SALARIOS")
-        from plots_assets import _calcular_indice_brecha_seccion
-        merged = _calcular_indice_brecha_seccion(ocu, dist, CATEGORIA)
-        idx_col = "indice_brecha"
-    else:
-        merged  = _indice_brecha(cfg)
-        idx_col = "indice"
+    ocu = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"]).copy()
+    ocu["municipio"] = ocu["municipio"].str.lower()
 
-    idx_año = merged[merged["año"] == AÑO_MAPA][idx_col]
-    ok = bool((idx_año > 0).any()) and bool((idx_año < 0).any())
+    if NIVEL == "seccion":
+        ocu["seccion_key"] = ocu["geocode"].astype(str).str.split("_", n=1).str[1]
+        grp_cols = ["seccion_key", "año"]
+    else:
+        grp_cols = ["municipio", "año"]
+
+    ocu_hm = (
+        ocu[ocu["sexo"].isin(["Hombres", "Mujeres"]) & (ocu["ocupacion"] != "No consta")]
+        .groupby(grp_cols + ["sexo"], as_index=False)["num_casos"].sum()
+        .pivot(index=grp_cols, columns="sexo", values="num_casos")
+        .reset_index()
+    )
+    ocu_hm.columns.name = None
+    for col in ["Hombres", "Mujeres"]:
+        if col not in ocu_hm.columns:
+            ocu_hm[col] = 0
+    ocu_hm[["Hombres", "Mujeres"]] = ocu_hm[["Hombres", "Mujeres"]].fillna(0)
+    ocu_hm["indice_brecha"] = (
+        2 * ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"]) - 1
+    )
+
+    MIN_TRAB = cfg.get("min_trabajadores_seccion", 10)
+    MODO_COLOR     = cfg.get("modo_color", "divergente")
+    SIMETRICO      = cfg.get("simetrico", True)
+    UMBRAL_PARIDAD = cfg.get("umbral_paridad", 0.05)
+
+    # Filtro según el NIVEL
+    if NIVEL == "seccion":
+        ocu_hm = ocu_hm[(ocu_hm["Hombres"] + ocu_hm["Mujeres"]) >= MIN_TRAB].copy()
+
+    lim   = ocu_hm["indice_brecha"].max()
+    lim_d = ocu_hm["indice_brecha"].min()
+
+    # Umbral de paridad para forzar secuencial
+    if MODO_COLOR == "divergente":
+        if abs(lim_d) < UMBRAL_PARIDAD:
+            MODO_COLOR = "secuencial"
+
+    if MODO_COLOR == "secuencial":
+        ocu_hm["indice_brecha"] = ocu_hm["indice_brecha"].abs()
+        idx_año = ocu_hm[ocu_hm["año"] == AÑO_MAPA]["indice_brecha"]
+        ok = len(idx_año) > 0
+        report_md += f"- Escala secuencial viable (datos válidos en {AÑO_MAPA}): {'🟢' if ok else '🔴'}\n"
+    else:
+        idx_año = ocu_hm[ocu_hm["año"] == AÑO_MAPA]["indice_brecha"]
+        if SIMETRICO:
+            lim_sim = max(abs(lim_d), abs(lim))
+            ok = lim_sim > 0
+            report_md += f"- TwoSlopeNorm simétrico viable (rango no plano en {AÑO_MAPA}): {'🟢' if ok else '🔴'}\n"
+        else:
+            ok = bool((idx_año > 0).any()) and bool((idx_año < 0).any())
+            report_md += f"- TwoSlopeNorm asimétrico viable (+ y − en {AÑO_MAPA}): {'🟢' if ok else '🔴'}\n"
+            
     passed = passed and ok
-    report_md += f"- TwoSlopeNorm viable (+ y − en {AÑO_MAPA}): {'🟢' if ok else '🔴'}\n"
 
     # Año mapa existe en los datos
-    ok_ano = AÑO_MAPA in set(merged["año"].unique())
+    ok_ano = AÑO_MAPA in set(ocu_hm["año"].unique())
     passed = passed and ok_ano
     report_md += f"- Año {AÑO_MAPA} presente en datos: {'🟢' if ok_ano else '🔴'}\n"
 
     return AssetCheckResult(
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
-        metadata={"Check_Mapa_Brecha": MetadataValue.md(report_md)},
+        metadata={"Check_Mapa_Brecha_Genero": MetadataValue.md(report_md)},
     )
 
 
@@ -952,7 +917,7 @@ def check_output_plots(context):
     puede ser del run anterior, comprometiendo la integridad del commit.
 
     BUG FIX: en lugar de glob *.png (que pasaba con ficheros anticuados como
-    brecha_salarial_slope.png), verifica explícitamente cada nombre canónico
+    brecha_genero_divergente.png), verifica explícitamente cada nombre canónico
     actual. Detecta tanto ficheros faltantes como nombres obsoletos en disco.
     """
     plot_dir  = get_plot_dir()
@@ -1587,10 +1552,16 @@ def check_datos_brecha_temporal_edad(context):
     df = df[df["sexo"].isin(["Hombres","Mujeres"])]
 
     if ISLA != "Todas":
-        df = df[df["isla"].str.upper() == ISLA.upper()]
+        islas_filtro = _islas_en_ambito(ISLA)
+        if islas_filtro:
+            df = df[df["isla"].str.upper().isin(
+                [i.upper() for i in islas_filtro]
+            )]
+        else:
+            df = df[df["isla"].str.upper() == ISLA.upper()]
         ok = len(df) > 0
         passed = passed and ok
-        report_md += f"- Isla `{ISLA}` con datos: {'🟢' if ok else '🔴'}\n"
+        report_md += f"- Ámbito `{ISLA}` con datos: {'🟢' if ok else '🔴'}\n"
 
     ok = {"Hombres","Mujeres"}.issubset(set(df["sexo"].unique()))
     passed = passed and ok
@@ -1849,22 +1820,33 @@ def check_ano_configurable_existe(context, preprocesar_datos_p5: str):
             passed = passed and ok
             report_md += f"| `mapa_distribucion.ano` | {ano_md} | `{os.path.basename(fpath)}` | {años} | {'🟢' if ok else '🔴'} |\n"
 
-    # brecha_salarial.ano_ini / ano_fin / ano_mapa
-    bs_cfg = cfg.get("brecha_salarial", {})
-    for key in ("ano_ini", "ano_fin", "ano_mapa"):
-        ano = bs_cfg.get(key)
-        if not ano:
-            continue
+    # mapa_brecha_genero.ano_mapa
+    mb_cfg = cfg.get("mapa_brecha_genero", {})
+    ano_mapa = mb_cfg.get("ano_mapa")
+    if ano_mapa:
         for ds_key in ("dataset_ocu", "dataset_dist"):
-            ds = bs_cfg.get(ds_key, "")
+            ds = mb_cfg.get(ds_key, "")
             fpath = os.path.join(preprocesar_datos_p5, ds)
-            if not os.path.exists(fpath):
-                continue
-            df   = pd.read_csv(fpath)
-            años = sorted(df["año"].dropna().unique()) if "año" in df.columns else []
-            ok   = ano in años
-            passed = passed and ok
-            report_md += f"| `brecha_salarial.{key}` | {ano} | `{ds}` | {años} | {'🟢' if ok else '🔴'} |\n"
+            if os.path.exists(fpath):
+                df = pd.read_csv(fpath)
+                años = sorted(df["año"].dropna().unique()) if "año" in df.columns else []
+                ok = ano_mapa in años
+                passed = passed and ok
+                report_md += f"| `mapa_brecha_genero.ano_mapa` | {ano_mapa} | `{ds}` | {años} | {'🟢' if ok else '🔴'} |\n"
+
+    # brecha_genero.ano_ini / ano_fin
+    bg_cfg = cfg.get("brecha_genero", {})
+    for key in ("ano_ini", "ano_fin"):
+        ano = bg_cfg.get(key)
+        if ano:
+            ds = bg_cfg.get("dataset_ocu", "")
+            fpath = os.path.join(preprocesar_datos_p5, ds)
+            if os.path.exists(fpath):
+                df = pd.read_csv(fpath)
+                años = sorted(df["año"].dropna().unique()) if "año" in df.columns else []
+                ok = ano in años
+                passed = passed and ok
+                report_md += f"| `brecha_genero.{key}` | {ano} | `{ds}` | {años} | {'🟢' if ok else '🔴'} |\n"
 
     # ocupacion_divergente.ano (opcional)
     ano_od = cfg.get("ocupacion_divergente", {}).get("ano")
@@ -1884,119 +1866,6 @@ def check_ano_configurable_existe(context, preprocesar_datos_p5: str):
         metadata={"Ano_Configurable": MetadataValue.md(report_md)},
     )
 
-
-@asset_check(
-    asset=plot_brecha_salarial,
-    description=(
-        "Verifica que los municipios del top N tienen suficientes trabajadores "
-        "para que el ratio H/M del lollipop sea estadísticamente estable."
-    ),
-)
-def check_ratio_hm_estabilidad(context):
-    """
-    Gestalt — Proporcionalidad: en un municipio con 20 trabajadores, añadir
-    un contrato de hombre mueve el ratio H/M en 5 puntos porcentuales.
-    Ese municipio puede dominar el top N del lollipop por pura volatilidad
-    estadística, no por una brecha salarial real.
-
-    Umbral: municipios con < 30 trabajadores en ambos años se marcan como
-    inestables. Si el top N contiene alguno, el check falla con WARN.
-    """
-    MIN_TRABAJADORES = 30
-    cfg   = get_plot_config()["brecha_salarial"]
-    ocu   = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-    TOP_N = cfg.get("top_n", 5)
-    AÑO_INI, AÑO_FIN = cfg["ano_ini"], cfg["ano_fin"]
-
-    passed = True
-    report_md = f"### Estabilidad del ratio H/M en top {TOP_N} (mín. {MIN_TRABAJADORES} trabajadores)\n\n"
-
-    masa = (
-        ocu[ocu["sexo"].isin(["Hombres","Mujeres"]) &
-            ocu["año"].isin([AÑO_INI, AÑO_FIN])]
-        .groupby(["municipio","año"])["num_casos"].sum()
-        .reset_index()
-    )
-    masa_min = masa.groupby("municipio")["num_casos"].min()
-    inestables = masa_min[masa_min < MIN_TRABAJADORES].index.tolist()
-
-    merged = _indice_brecha(cfg)
-    ini    = merged[merged["año"] == AÑO_INI][["municipio","indice"]].rename(columns={"indice":"ini"})
-    fin    = merged[merged["año"] == AÑO_FIN][["municipio","indice"]].rename(columns={"indice":"fin"})
-    slope  = ini.merge(fin, on="municipio")
-    slope["delta"] = slope["fin"] - slope["ini"]
-    top_idx = slope["delta"].abs().nlargest(TOP_N).index
-    top_munis = slope.loc[top_idx, "municipio"].tolist()
-
-    inestables_en_top = [m for m in top_munis if m in inestables]
-    ok = len(inestables_en_top) == 0
-    passed = passed and ok
-
-    report_md += f"- Municipios inestables (< {MIN_TRABAJADORES} trab.) en el top {TOP_N}: {'🟢' if ok else '⚠️'}\n"
-    if inestables_en_top:
-        report_md += f"  - {inestables_en_top}\n"
-        report_md += f"  - Considera aumentar `top_n` o filtrar municipios con masa insuficiente.\n"
-
-    report_md += f"\nTotal municipios inestables en el dataset: {len(inestables)}\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Ratio_HM_Estabilidad": MetadataValue.md(report_md)},
-    )
-
-
-@asset_check(
-    asset=plot_brecha_salarial,
-    description=(
-        "Verifica que todos los municipios del top N tienen datos de ambos "
-        "sexos en los dos años del lollipop (sin NaN en el pivot)."
-    ),
-)
-def check_balance_sexos_por_municipio(context):
-    """
-    Gestalt — Similitud: si en un municipio solo hay datos de un sexo, el
-    pivot produce NaN y ese municipio desaparece del lollipop sin aviso.
-    El lector interpreta la ausencia como "sin brecha" cuando en realidad
-    es un dato faltante — el error de interpretación más grave posible en
-    un gráfico de brecha de género.
-    """
-    cfg   = get_plot_config()["brecha_salarial"]
-    ocu   = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-    TOP_N = cfg.get("top_n", 5)
-    AÑO_INI, AÑO_FIN = cfg["ano_ini"], cfg["ano_fin"]
-
-    passed = True
-    report_md = f"### Balance de sexos por municipio (años {AÑO_INI} y {AÑO_FIN})\n\n"
-
-    df_v = ocu[
-        ocu["sexo"].isin(["Hombres","Mujeres"]) &
-        ocu["año"].isin([AÑO_INI, AÑO_FIN]) &
-        (ocu["ocupacion"] != "No consta")
-    ]
-
-    pivot = (df_v.groupby(["municipio","año","sexo"])["num_casos"]
-             .sum().unstack("sexo").reset_index())
-    pivot.columns.name = None
-
-    for col in ["Hombres", "Mujeres"]:
-        if col not in pivot.columns:
-            pivot[col] = float("nan")
-
-    incompletos = pivot[pivot[["Hombres","Mujeres"]].isna().any(axis=1)]
-    n_inc = len(incompletos["municipio"].unique())
-    ok    = n_inc == 0
-    passed = passed and ok
-    report_md += f"- Municipios con solo un sexo: {'🟢' if ok else '🔴'} ({n_inc})\n"
-    if n_inc > 0:
-        report_md += f"  - Municipios: `{', '.join(incompletos['municipio'].unique()[:8])}`\n"
-        report_md += f"  - Estos municipios desaparecerán del lollipop si caen en el top {TOP_N}.\n"
-
-    return AssetCheckResult(
-        passed=bool(passed),
-        severity=AssetCheckSeverity.WARN,
-        metadata={"Balance_Sexos_Municipio": MetadataValue.md(report_md)},
-    )
 
 
 @asset_check(
@@ -2233,4 +2102,59 @@ def check_datos_segregacion_sectorial_temporal(context):
         passed=bool(passed),
         severity=AssetCheckSeverity.WARN,
         metadata={"check": MetadataValue.md(report_md)},
+    )
+
+
+@asset_check(
+    asset=plot_brecha_genero,
+    description="Precondiciones de datos para plot_brecha_genero (arrow plot).",
+)
+def check_datos_brecha_genero(context):
+    """
+    Gestalt — Proporcionalidad: la longitud y dirección de las flechas debe reflejar
+    la magnitud y dirección matemática del cambio de la brecha.
+    Gramática de gráficos: requiere que los años de inicio y fin estén presentes en los datos,
+    y que existan municipios con datos en ambos años para poder trazar las flechas.
+    """
+    cfg     = get_plot_config()["brecha_genero"]
+    AÑO_INI = cfg.get("ano_ini", 2021)
+    AÑO_FIN = cfg.get("ano_fin", 2023)
+    TOP_N   = cfg.get("top_n", 5)
+    passed  = True
+    report_md = f"### Precondiciones: plot_brecha_genero (año_ini={AÑO_INI}, año_fin={AÑO_FIN})\n\n"
+
+    ocu = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    ocu_df = ocu.copy()
+    ocu_df["municipio"] = ocu_df["municipio"].str.lower()
+
+    # Verificar columnas
+    req_cols = {"municipio", "año", "sexo", "num_casos"}
+    ok_cols = req_cols.issubset(ocu_df.columns)
+    passed = passed and ok_cols
+    report_md += f"- Columnas requeridas: {'🟢' if ok_cols else '🔴'} (faltan: {req_cols - set(ocu_df.columns) or '–'})\n"
+
+    if ok_cols:
+        años_disponibles = set(ocu_df["año"].unique())
+        ok_ini = AÑO_INI in años_disponibles
+        ok_fin = AÑO_FIN in años_disponibles
+        passed = passed and ok_ini and ok_fin
+        report_md += f"- Año inicio {AÑO_INI} presente: {'🟢' if ok_ini else '🔴'}\n"
+        report_md += f"- Año fin {AÑO_FIN} presente: {'🟢' if ok_fin else '🔴'}\n"
+
+        if ok_ini and ok_fin:
+            from plots_assets import _calcular_indice_brecha
+            merged = _calcular_indice_brecha(ocu)
+            ini = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]]
+            fin = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]]
+            slope = ini.merge(fin, on="municipio")
+            
+            n_comunes = len(slope)
+            ok_comunes = n_comunes >= TOP_N
+            passed = passed and ok_comunes
+            report_md += f"- Municipios comunes con datos en ambos años (≥ {TOP_N}): {'🟢' if ok_comunes else '🔴'} ({n_comunes} municipios)\n"
+
+    return AssetCheckResult(
+        passed=bool(passed),
+        severity=AssetCheckSeverity.WARN,
+        metadata={"Check_Brecha_Genero": MetadataValue.md(report_md)},
     )

@@ -188,8 +188,7 @@ def preprocesar_datos_p5() -> str:
 @asset(
     deps=[
         "plot_actividad_barras",
-        "plot_brecha_salarial",
-        "plot_mapa_brecha_salarial",
+        "plot_mapa_brecha_genero",
         "plot_gini_evolucion_islas",
         "plot_segregacion_sectorial",
         "plot_covid_sueldos_islas",
@@ -198,6 +197,7 @@ def preprocesar_datos_p5() -> str:
         "plot_historico_tipos_contrato_por_edad",
         "plot_ocupacion_divergente_canarias",
         "plot_segregacion_sectorial_temporal",
+        "plot_brecha_genero",
     ],
     group_name="publicacion",
     description=(

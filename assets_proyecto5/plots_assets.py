@@ -23,6 +23,88 @@ import config
 warnings.filterwarnings("ignore")
 
 # ══════════════════════════════════════════════════════════════════════════════
+# CONSTANTES
+# ══════════════════════════════════════════════════════════════════════════════
+
+ABREV_ACTIVIDADES = {
+    "Producción cinematográfica, de vídeo y de programas de televisión, "
+    "grabación de sonido y edición musical":                 "Prod. audiovisual",
+    "Servicios a edificios y actividades de jardinería":     "Servicios a edificios",
+    "Actividades de construcción especializada":             "Construcción esp.",
+    "Administración pública y defensa; seguridad social obligatoria": "Adm. pública",
+    "Actividades de creación artística y artes escénicas":   "Artes escénicas",
+    "Actividades sanitarias":                                "Sanidad",
+    "Servicios de alojamiento":                              "Alojamiento",
+    "Servicios de comidas y bebidas":                        "Hostelería",
+    "Comercio al por menor":                                 "Comercio minorista",
+    "Comercio al por mayor":                                 "Comercio mayorista",
+    "Educación":                                             "Educación",
+    "Construcción de edificios":                             "Construcción",
+    "Agricultura, ganadería, caza y servicios relacionados": "Agricultura",
+    "Pesca y acuicultura":                                   "Pesca",
+    "Transporte terrestre y por tubería":                    "Transporte",
+    "Almacenamiento y actividades anexas al transporte":     "Almacenamiento",
+    "Actividades deportivas, recreativas y de entretenimiento": "Deporte/recreación",
+    "Asistencia en establecimientos residenciales":          "Asist. residencial",
+    "Actividades de servicios sociales sin alojamiento":     "Servicios sociales",
+    "Actividades de empleo":                                 "Activ. de empleo",
+}
+
+
+def _abreviar_actividad(act: str) -> str:
+    if not isinstance(act, str):
+        return act
+    act_clean = act.lower().strip()
+    
+    if "comercio al por menor" in act_clean:
+        return "Comercio minorista"
+    if "comercio al por mayor" in act_clean:
+        return "Comercio mayorista"
+    if "construcción especializada" in act_clean:
+        return "Construcción"
+    if "construcción de edificios" in act_clean:
+        return "Construcción"
+    if "construcción" in act_clean:
+        return "Construcción"
+    if "comidas y bebidas" in act_clean:
+        return "Hostelería"
+    if "alojamiento" in act_clean:
+        return "Alojamiento"
+    if "administración pública" in act_clean:
+        return "Adm. pública"
+    if "creación artística" in act_clean:
+        return "Artes escénicas"
+    if "sanitarias" in act_clean:
+        return "Sanidad"
+    if "educación" in act_clean:
+        return "Educación"
+    if "agricultura" in act_clean:
+        return "Agricultura"
+    if "pesca" in act_clean:
+        return "Pesca"
+    if "transporte terrestre" in act_clean:
+        return "Transporte"
+    if "almacenamiento" in act_clean:
+        return "Almacenamiento"
+    if "deportivas, recreativas" in act_clean:
+        return "Deporte/recreación"
+    if "establecimientos residenciales" in act_clean:
+        return "Asist. residencial"
+    if "servicios sociales sin alojamiento" in act_clean:
+        return "Servicios sociales"
+    if "actividades de empleo" in act_clean:
+        return "Activ. de empleo"
+    if "servicios a edificios" in act_clean:
+        return "Servicios a edificios"
+    if "oficina y otras" in act_clean:
+        return "Activ. administrativas"
+    if "cinematográfica" in act_clean:
+        return "Prod. audiovisual"
+        
+    return act[:30].strip()
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -246,9 +328,9 @@ def _calcular_indice_brecha_seccion(ocu: pd.DataFrame,
 # ── Constantes compartidas ────────────────────────────────────────────────────
 CATEGORIA_MAP = {
     "SUELDOS_SALARIOS": {
-        "nombre_corto": "salarial",
-        "nombre_completo": "brecha salarial de género",
-        "leyenda": "Índice de brecha salarial",
+        "nombre_corto": "de género",
+        "nombre_completo": "brecha de género",
+        "leyenda": "Índice de brecha de género",
         "formula": "ratio H/(H+M) × % sueldos sobre renta",
         "desc": "sueldos y salarios",
     },
@@ -334,33 +416,51 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
       'fill'  → 100% apilado: muestra solo proporción H/M  (recomendado)
       'stack' → apilado absoluto: volumen + composición
       'dodge' → agrupado: comparar valores absolutos H vs M
+    Soporta isla individual, provincia (SC Tenerife, Las Palmas) o Todas.
     """
-    from checks_p5 import inferir_isla  # import local documentado: depende de checks_p5
+    from checks_p5 import inferir_isla
 
     cfg  = get_plot_config()["actividad_barras"]
     pal  = get_paleta()
     ISLA = cfg.get("isla", "Todas")
-    MODO = cfg.get("modo", "fill")  # fill | stack | dodge
+    MODO = cfg.get("modo", "fill")
 
     df = pd.read_csv(get_processed_path(cfg["dataset"])).dropna(subset=["num_casos"])
     df = df[df["Sexo"].isin(["Hombres", "Mujeres"]) &
             (df["Actividad económica"] != "No consta")]
 
+    # Filtro geográfico: isla, provincia o Todas
     if ISLA != "Todas":
-        df["isla"] = df["municipio"].apply(inferir_isla)
-        df = df[df["isla"] == ISLA]
+        islas_filtro = _islas_en_ambito(ISLA)
+        if islas_filtro:
+            # Provincia o agrupación — inferir isla y filtrar por lista
+            df["isla"] = df["municipio"].apply(inferir_isla)
+            df = df[df["isla"].isin(islas_filtro)]
+            context.log.info(
+                f"Ámbito '{ISLA}' → islas: {islas_filtro} "
+                f"→ {len(df)} filas"
+            )
+        else:
+            # Isla individual
+            df["isla"] = df["municipio"].apply(inferir_isla)
+            df = df[df["isla"] == ISLA]
+            context.log.info(f"Isla '{ISLA}' → {len(df)} filas")
+
+    if df.empty:
+        context.log.warning(f"Sin datos para ámbito '{ISLA}'.")
+        return
 
     df["actividad"] = df["Actividad económica"].replace(
         {"Agricultura, ganadería y pesca": "Agricultura/\nGanadería"})
 
     agg = df.groupby(["Periodo", "actividad", "Sexo"], as_index=False)["num_casos"].sum()
 
-    # Ordenar facets por volumen total descendente
     orden_act = (
         agg.groupby("actividad")["num_casos"].sum()
         .sort_values(ascending=False).index.tolist()
     )
-    agg["actividad"] = pd.Categorical(agg["actividad"], categories=orden_act, ordered=True)
+    agg["actividad"] = pd.Categorical(
+        agg["actividad"], categories=orden_act, ordered=True)
 
     if MODO == "fill":
         pos      = position_fill()
@@ -378,15 +478,23 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
         subtitle = "Suma de trabajadores por sección censal (apilado H+M)"
         y_fmt    = fmt_k
 
+    # Título dinámico según ámbito
+    if ISLA == "Todas":
+        titulo_loc = "Toda la provincia"
+    else:
+        titulo_loc = ISLA
+
     p = (
         ggplot(agg, aes(x="factor(Periodo)", y="num_casos", fill="Sexo"))
         + geom_col(position=pos, width=0.7, alpha=0.9)
-        + facet_wrap("~ actividad", scales="free_y" if MODO != "fill" else "fixed", ncol=2)
-        + scale_fill_manual(values={"Hombres": pal["H"], "Mujeres": pal["M"]})
+        + facet_wrap("~ actividad",
+                     scales="free_y" if MODO != "fill" else "fixed",
+                     ncol=2)
+        + scale_fill_manual(
+            values={"Hombres": pal["H"], "Mujeres": pal["M"]})
         + scale_y_continuous(labels=y_fmt)
         + labs(
-            title=f"Actividad económica por año y sexo — "
-                  f"{ISLA if ISLA != 'Todas' else 'Toda la provincia'}",
+            title=f"Actividad económica por año y sexo — {titulo_loc}",
             subtitle=subtitle,
             x="", y=y_label, fill="Sexo",
             caption="Fuente: ISTAC",
@@ -404,114 +512,34 @@ def plot_actividad_barras(context: AssetExecutionContext) -> None:
     )
     out = os.path.join(get_plot_dir(), "actividad_barras.png")
     p.save(out, width=14, height=8, dpi=150, verbose=False)
-    context.add_output_metadata({"plot": MetadataValue.md(f"![Actividad Barras]({out})")})
-
-
-@asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
-def plot_brecha_salarial(context: AssetExecutionContext) -> None:
-    """
-    Bar chart horizontal: top N municipios con mayor variación absoluta
-    del índice de brecha de género entre ano_ini y ano_fin.
-    Ordenado por |delta| descendente. Color = dirección del cambio.
-
-    Índice = 2*H/(H+M) - 1, acotado en [-1, +1].
-    +1 = solo hombres, 0 = paridad, -1 = solo mujeres.
-    """
-    cfg      = get_plot_config()["brecha_salarial"]
-    TOP_N    = cfg.get("top_n", 5)
-    AÑO_INI  = cfg.get("ano_ini", 2021)
-    AÑO_FIN  = cfg.get("ano_fin", 2023)
-    UMBRAL   = cfg.get("umbral", 0.02)
-
-    ocu = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
-
-    merged = _calcular_indice_brecha(ocu)
-
-    context.log.info(
-        f"Rango índice: {merged['indice_brecha'].min():.3f} "
-        f"a {merged['indice_brecha'].max():.3f}"
-    )
-
-    # ── Top N municipios con mayor variación ──────────────────────────────────
-    ini = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(
-        columns={"indice_brecha": "brecha_ini"})
-    fin = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(
-        columns={"indice_brecha": "brecha_fin"})
-
-    slope = ini.merge(fin, on="municipio")
-    slope["delta"] = slope["brecha_fin"] - slope["brecha_ini"]
-
-    context.log.info(
-        f"Delta medio: {slope['delta'].abs().mean():.3f} · "
-        f"Delta máx: {slope['delta'].abs().max():.3f}"
-    )
-
-    slope["direccion"] = slope["delta"].apply(
-        lambda d: "Brecha aumenta"   if d >  UMBRAL
-        else ("Brecha disminuye"     if d < -UMBRAL
-        else  "Sin cambio relevante"))
-
-    top_idx = slope["delta"].abs().nlargest(TOP_N).index
-    top     = slope.loc[top_idx].sort_values("delta", key=abs, ascending=True)
-
-    COLORES = {
-        "Brecha aumenta":       "#D13111",
-        "Brecha disminuye":     "#10C710",
-        "Sin cambio relevante": "#AAAAAA",
-    }
-
-    p = (
-        ggplot(top, aes(x="reorder(municipio, delta)", y="delta", fill="direccion"))
-        + geom_col(width=0.65, alpha=0.9)
-        + geom_hline(yintercept=0, linetype="dashed", color="#333333", size=0.4)
-        + scale_fill_manual(values=COLORES, name=None)
-        + coord_flip()
-        + labs(
-            title="Municipios con mayor cambio en brecha de género",
-            subtitle=(
-                f"Δ índice entre {AÑO_INI} y {AÑO_FIN} · "
-                f"Top {TOP_N} por variación absoluta · "
-                f"+ = brecha aumenta  /  − = brecha disminuye"
-            ),
-            x="", y="Cambio en índice de brecha (2·H/(H+M) − 1)",
-            caption="Fuente: ISTAC · ocupacion-sc-3",
-        )
-        + theme_minimal()
-        + theme(
-            figure_size=(10, 5),
-            plot_title=element_text(size=14, face="bold"),
-            plot_subtitle=element_text(size=10, color="#555555"),
-            panel_grid_major_y=element_blank(),
-            panel_grid_minor=element_blank(),
-            legend_position="bottom",
-        )
-    )
-    out = os.path.join(get_plot_dir(), "brecha_salarial_divergente.png")
-    p.save(out, width=10, height=5, dpi=150, verbose=False)
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Brecha Salarial Divergente]({out})")})
+        {"plot": MetadataValue.md(f"![Actividad Barras]({out})")})
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
-def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
+def plot_mapa_brecha_genero(context: AssetExecutionContext) -> None:
     """
-    Mapa coroplético de la brecha salarial — provincia SC Tenerife.
+    Mapa coroplético de la brecha de género — provincia SC Tenerife.
     Cmap: rosa = mayoría mujeres, azul = mayoría hombres, blanco = paridad.
 
     Índice = 2 * H/(H+M) - 1, acotado en [-1, +1].
-    La norma se adapta al rango real de los datos calculado sobre todos
-    los años disponibles, garantizando comparabilidad inter-anual.
+    Norma adaptada al rango real asimétrico de los datos sobre todos los
+    años disponibles, garantizando comparabilidad inter-anual.
 
-    El join entre GeoJSON y datos se hace con clave en minúsculas para
-    evitar discrepancias de capitalización entre fuentes.
-    Gris #cccccc → sección/municipio en GeoJSON sin dato en ISTAC.
+    nivel="seccion": filtro de masa mínima (min_trabajadores_seccion) para
+    eliminar secciones con ratios estadísticamente inestables.
+    nivel="municipio": sin filtro de masa, rango real sin reescalar.
+
+    El join entre GeoJSON y datos se hace con clave en minúsculas.
+    Gris #cccccc → sección/municipio sin dato o bajo umbral de masa.
     """
-    cfg      = get_plot_config()["brecha_salarial"]
+    cfg      = get_plot_config()["mapa_brecha_genero"]
     AÑO_MAPA = cfg.get("ano_mapa", 2023)
     NIVEL    = cfg.get("nivel", "municipio")
-
-    cmap_mapa = LinearSegmentedColormap.from_list(
-        "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
-    )
+    MIN_TRAB = cfg.get("min_trabajadores_seccion", 10)
+    modo_color_raw = cfg.get("modo_color", "divergente")
+    MODO_COLOR     = "secuencial" if modo_color_raw in ["secuencial", "sec"] else "divergente"
+    SIMETRICO      = cfg.get("simetrico", True)
+    UMBRAL_PARIDAD = cfg.get("umbral_paridad", 0.05)
 
     ocu = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
     ocu = ocu.copy()
@@ -538,19 +566,65 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         2 * ocu_hm["Hombres"] / (ocu_hm["Hombres"] + ocu_hm["Mujeres"]) - 1
     )
 
-    # Rango calculado sobre TODOS los años para comparabilidad inter-anual
-    lim = ocu_hm["indice_brecha"].abs().max()
+    # Filtro de masa mínima solo para sección censal
+    if NIVEL == "seccion":
+        antes = len(ocu_hm)
+        ocu_hm = ocu_hm[(ocu_hm["Hombres"] + ocu_hm["Mujeres"]) >= MIN_TRAB].copy()
+        context.log.info(
+            f"Filtro masa mínima ({MIN_TRAB} trab.): "
+            f"{antes} → {len(ocu_hm)} secciones"
+        )
+
+    # Rango real asimétrico sobre TODOS los años
+    lim   = ocu_hm["indice_brecha"].max()
+    lim_d = ocu_hm["indice_brecha"].min()
     context.log.info(
-        f"Rango índice (todos los años): "
-        f"{ocu_hm['indice_brecha'].min():.3f} a {ocu_hm['indice_brecha'].max():.3f}"
+        f"Rango real índice ({NIVEL}, todos los años): {lim_d:.3f} a {lim:.3f}"
     )
 
-    ocu_hm["indice_brecha"] = ocu_hm["indice_brecha"]/lim
+    # ── Umbral de paridad para forzar secuencial ──────────────────────────────
+    if MODO_COLOR == "divergente":
+        if abs(lim_d) < UMBRAL_PARIDAD:
+            context.log.warning(
+                f"Advertencia: No hay dominancia femenina suficiente para justificar escala divergente "
+                f"(mín. abs(lim_d)={abs(lim_d):.3f} < umbral_paridad={UMBRAL_PARIDAD:.3f}). "
+                f"Forzando modo_color='secuencial'."
+            )
+            MODO_COLOR = "secuencial"
 
-    if lim == 0:
-        norm = plt.Normalize(vmin=-0.01, vmax=0.01)
+    # ── Configurar Colormap y Normalización según MODO_COLOR ──────────────────
+    if MODO_COLOR == "secuencial":
+        # Calcular valor absoluto del índice
+        ocu_hm["indice_brecha"] = ocu_hm["indice_brecha"].abs()
+        lim = ocu_hm["indice_brecha"].max()
+        lim_d = 0.0
+        if lim == 0:
+            norm = plt.Normalize(vmin=0, vmax=0.01)
+        else:
+            norm = plt.Normalize(vmin=0, vmax=lim)
+        cmap_mapa = LinearSegmentedColormap.from_list(
+            "blanco_purpura", ["#ffffff", "#926DB3"]
+        )
     else:
-        norm = mcolors.TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
+        # Modo divergente
+        cmap_mapa = LinearSegmentedColormap.from_list(
+            "rosa_blanco_azul", ["#D94A8C", "#ffffff", "#4A90D9"]
+        )
+        if SIMETRICO:
+            lim_sim = max(abs(lim_d), abs(lim))
+            if lim_sim == 0:
+                norm = plt.Normalize(vmin=-0.01, vmax=0.01)
+            else:
+                norm = mcolors.TwoSlopeNorm(vmin=-lim_sim, vcenter=0, vmax=lim_sim)
+        else:
+            if lim == 0 and lim_d == 0:
+                norm = plt.Normalize(vmin=-0.01, vmax=0.01)
+            elif lim_d >= 0:
+                norm = plt.Normalize(vmin=0, vmax=lim)
+            elif lim <= 0:
+                norm = plt.Normalize(vmin=lim_d, vmax=0)
+            else:
+                norm = mcolors.TwoSlopeNorm(vmin=lim_d, vcenter=0, vmax=lim)
 
     gdf_mun = cargar_gdf_municipios(AÑO_MAPA, NIVEL, context.log)
     fig, ax = plt.subplots(figsize=(12, 8))
@@ -572,7 +646,8 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
             sin_dato = gdf_p[gdf_p["indice_brecha"].isna()]["seccion_key"].unique()
             if len(sin_dato) > 0:
                 context.log.warning(
-                    f"Secciones sin índice ({len(sin_dato)}): {sorted(sin_dato)}")
+                    f"Secciones sin índice o bajo umbral ({len(sin_dato)}): "
+                    f"{sorted(sin_dato)[:10]}{'...' if len(sin_dato) > 10 else ''}")
         else:
             datos = ocu_hm[ocu_hm["año"] == AÑO_MAPA][
                 ["municipio", "indice_brecha"]].copy()
@@ -589,34 +664,95 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
 
         tiene_indice = gdf_p["indice_brecha"].notna()
 
-        # Capa 1: con dato → cmap divergente
+        # Capa 1: con dato → cmap divergente/secuencial
         gdf_p[tiene_indice].plot(
             column="indice_brecha", cmap=cmap_mapa,
-            norm=norm, linewidth=0.15, edgecolor="white",
+            norm=norm, linewidth=0.25, edgecolor="#d3d3d3",
             legend=False, ax=ax)
 
-        # Capa 2: sin dato → gris neutro
+        # Capa 2: sin dato o bajo umbral → gris neutro
         if (~tiene_indice).any():
             gdf_p[~tiene_indice].plot(
-                color="#cccccc", linewidth=0.15, edgecolor="white", ax=ax)
+                color="#cccccc", linewidth=0.25, edgecolor="#d3d3d3", ax=ax)
+            label_gris = (
+                f"Sin dato / masa < {MIN_TRAB}" if NIVEL == "seccion"
+                else "Sin dato en fuente"
+            )
             ax.legend(
-                handles=[mpatches.Patch(color="#cccccc", label="Sin dato en fuente")],
+                handles=[mpatches.Patch(color="#cccccc", label=label_gris)],
                 loc="lower left", fontsize=8, frameon=False)
+
+        # Capa 3: Borde exterior de las islas (costa) para máxima definición visual
+        try:
+            gdf_p.dissolve().boundary.plot(ax=ax, color="#444444", linewidth=0.8, zorder=5)
+        except Exception as e:
+            context.log.warning(f"No se pudo dibujar el contorno exterior de las islas: {e}")
 
         ax.axis("off")
 
+    # ── Colorbar ──────────────────────────────────────────────────────────────
     sm = ScalarMappable(cmap=cmap_mapa, norm=norm)
     sm.set_array([])
     cbar = fig.colorbar(sm, ax=ax, orientation="vertical", shrink=0.55, pad=0.02)
-    cbar.set_label("Índice de segregación de género", fontsize=10)
-    cbar.set_ticks([-1, -1 / 2, 0, 1 / 2, 1])
-    cbar.set_ticklabels([
-        f"{-1:.2f}\n(más mujeres)",
-        f"{-1/2:.2f}",
-        "0\n(paridad)",
-        f"+{1/2:.2f}",
-        f"+{1:.2f}\n(más hombres)",
-    ])
+    
+    if MODO_COLOR == "secuencial":
+        cbar.set_label("Intensidad de segregación de género", fontsize=10)
+        cbar.set_ticks([0, lim])
+        cbar.set_ticklabels([
+            "0%\n(paridad)",
+            f"+{lim*100:.0f}%\n(más segregado)",
+        ])
+        indice_desc = "Índice = |2·H/(H+M) − 1|"
+        caption_extra = "El color representa intensidad de segregación sin distinguir dirección"
+    else:
+        cbar.set_label("% exceso de hombres sobre mujeres", fontsize=10)
+        if SIMETRICO:
+            lim_sim = max(abs(lim_d), abs(lim))
+            if lim_sim > 0:
+                cbar.set_ticks([-lim_sim, 0, lim_sim])
+                cbar.set_ticklabels([
+                    f"+{lim_sim*100:.0f}%\n(más mujeres)",
+                    "0%\n(paridad)",
+                    f"+{lim_sim*100:.0f}%\n(más hombres)",
+                ])
+            else:
+                cbar.set_ticks([0])
+                cbar.set_ticklabels(["0%\n(paridad)"])
+        else:
+            if lim_d < 0 < lim:
+                cbar.set_ticks([lim_d, 0, lim])
+                cbar.set_ticklabels([
+                    f"+{abs(lim_d)*100:.0f}%\n(más mujeres)",
+                    "0%\n(paridad)",
+                    f"+{lim*100:.0f}%\n(más hombres)",
+                ])
+            elif lim > 0:
+                cbar.set_ticks([0, lim])
+                cbar.set_ticklabels([
+                    "0%\n(paridad)",
+                    f"+{lim*100:.0f}%\n(más hombres)",
+                ])
+            elif lim_d < 0:
+                cbar.set_ticks([lim_d, 0])
+                cbar.set_ticklabels([
+                    f"+{abs(lim_d)*100:.0f}%\n(más mujeres)",
+                    "0%\n(paridad)",
+                ])
+            else:
+                cbar.set_ticks([0])
+                cbar.set_ticklabels(["0%\n(paridad)"])
+        
+        indice_desc = "Índice = 2·H/(H+M) − 1"
+        caption_extra = ""
+
+    # ── Títulos ───────────────────────────────────────────────────────────────
+    if NIVEL == "seccion":
+        caption_scale = f"(mín. {MIN_TRAB} trab. por sección)"
+    else:
+        caption_scale = ""
+
+    caption_parts = [part for part in [indice_desc, caption_scale, caption_extra, "Fuente: ISTAC · ocupacion-sc-3"] if part]
+    caption_text = "  ·  ".join(caption_parts)
 
     nivel_label = "sección censal" if NIVEL == "seccion" else "municipio"
     fig.suptitle(
@@ -624,16 +760,16 @@ def plot_mapa_brecha_salarial(context: AssetExecutionContext) -> None:
         fontsize=15, fontweight="bold", y=0.95)
     fig.text(
         0.5, 0.01,
-        "Índice = 2·H/(H+M) − 1  reescalado en [-1, 1]  ·  Fuente: ISTAC · ocupacion-sc-3",
+        caption_text,
         ha="center", fontsize=9, color="#666666",
         transform=fig.transFigure)
     fig.tight_layout(rect=[0, 0.04, 1, 1])
 
-    out = os.path.join(get_plot_dir(), "mapa_brecha_salarial.png")
+    out = os.path.join(get_plot_dir(), "mapa_brecha_genero.png")
     fig.savefig(out, dpi=150, bbox_inches="tight")
     plt.close(fig)
     context.add_output_metadata(
-        {"plot": MetadataValue.md(f"![Mapa Brecha Salarial]({out})")})
+        {"plot": MetadataValue.md(f"![Mapa Brecha de Género]({out})")})
 
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_desigualdad_y_renta")
@@ -779,44 +915,32 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].str.strip()
 
+    # Consolidar sectores de construcción agregando sus datos
+    mask_const = df["Actividad económica"].isin(["Construcción de edificios", "Actividades de construcción especializada"])
+    df.loc[mask_const, "Actividad económica"] = "Construcción"
+
     if isla_cfg != "Todas":
-        df = df[df["isla"].str.upper() == isla_cfg.upper()]
+        df = _filtrar_ambito(df, isla_cfg)
         if df.empty:
-            context.log.warning(f"No hay datos de contratos para la isla {isla_cfg} en {AÑO}-{MES:02d}.")
+            context.log.warning(f"No hay datos de contratos para el ámbito {isla_cfg} en {AÑO}-{MES:02d}.")
             return
 
     top_act = (df.groupby("Actividad económica")["Contratos"]
                .sum().nlargest(TOP_N).index.tolist())
+    if "Construcción" in df["Actividad económica"].values and "Construcción" not in top_act:
+        top_act.append("Construcción")
 
-    ABREV = {
-        "Producción cinematográfica, de vídeo y de programas de televisión, "
-        "grabación de sonido y edición musical":                 "Prod. audiovisual",
-        "Servicios a edificios y actividades de jardinería":     "Servicios a edificios",
-        "Actividades de construcción especializada":             "Construcción esp.",
-        "Administración pública y defensa; seguridad social obligatoria": "Adm. pública",
-        "Actividades de creación artística y artes escénicas":   "Artes escénicas",
-        "Actividades sanitarias":                                "Sanidad",
-        "Servicios de alojamiento":                              "Alojamiento",
-        "Servicios de comidas y bebidas":                        "Hostelería",
-        "Comercio al por menor":                                 "Comercio minorista",
-        "Comercio al por mayor":                                 "Comercio mayorista",
-        "Educación":                                             "Educación",
-        "Construcción de edificios":                             "Construcción",
-        "Agricultura, ganadería, caza y servicios relacionados": "Agricultura",
-        "Pesca y acuicultura":                                   "Pesca",
-        "Transporte terrestre y por tubería":                    "Transporte",
-        "Almacenamiento y actividades anexas al transporte":     "Almacenamiento",
-        "Actividades deportivas, recreativas y de entretenimiento": "Deporte/recreación",
-        "Asistencia en establecimientos residenciales":          "Asist. residencial",
-        "Actividades de servicios sociales sin alojamiento":     "Servicios sociales",
-        "Actividades de empleo":                                 "Activ. de empleo",
-    }
+    ABREV = ABREV_ACTIVIDADES
 
     # Colores por isla coherentes con el proyecto
     COLORES_ISLAS = get_colores_isla()
 
     # ── Preparar datos ────────────────────────────────────────────────────────
-    entidad_col = "Municipio" if isla_cfg != "Todas" else "isla"
+    is_province = isla_cfg in PROVINCIAS
+    if isla_cfg == "Todas" or is_province:
+        entidad_col = "isla"
+    else:
+        entidad_col = "Municipio"
     pivot = (
         df[df["Actividad económica"].isin(top_act)]
         .groupby(["Actividad económica", entidad_col, "sexo"])["Contratos"]
@@ -834,8 +958,7 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     pivot = pivot[(pivot["Hombres"] + pivot["Mujeres"]) >= MIN_CONTRATOS].copy()
 
     pivot["ratio_hm"]        = pivot["Hombres"] / (pivot["Hombres"] + pivot["Mujeres"])
-    pivot["actividad_short"] = pivot["Actividad económica"].map(ABREV).fillna(
-        pivot["Actividad económica"].str[:30])
+    pivot["actividad_short"] = pivot["Actividad económica"].apply(_abreviar_actividad)
     
     pivot["entidad"] = pivot["entidad"].str.strip()
     if isla_cfg == "Todas":
@@ -942,13 +1065,13 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     ax.tick_params(axis="y", length=0)
 
     handles, labels = ax.get_legend_handles_labels()
-    media_label = f"Media {isla_cfg}" if isla_cfg != "Todas" else "Media Canarias"
+    media_label = f"Media {_titulo_ambito(isla_cfg)}" if isla_cfg != "Todas" else "Media Canarias"
     media_handle = plt.scatter([], [], marker="D", s=30, color="#333333",
                                label=media_label)
     handles.append(media_handle)
     ax.legend(handles=handles, loc="upper left", bbox_to_anchor=(1.02, 1.0),
               fontsize=8.5, frameon=False,
-              title="Entidad" if n_entities > 9 or isla_cfg != "Todas" else "Isla",
+              title="Isla" if (isla_cfg == "Todas" or is_province) else "Municipio",
               title_fontsize=8.5)
 
     mes_names = {
@@ -957,7 +1080,10 @@ def plot_segregacion_sectorial(context: AssetExecutionContext) -> None:
     }
     title_date = f"{mes_names.get(MES, f'{MES:02d}')} {AÑO}"
 
-    if isla_cfg != "Todas":
+    if is_province:
+        title_text   = f"Segregación de género por actividad e isla — {_titulo_ambito(isla_cfg)}, {title_date}"
+        caption_text = f"◆ = media {_titulo_ambito(isla_cfg)}  ·  barra gris = rango entre islas  ·  Fuente: SEPE / OBECAN"
+    elif isla_cfg != "Todas":
         title_text   = f"Segregación de género por actividad en municipios de {isla_cfg} — {title_date}"
         caption_text = f"◆ = media {isla_cfg}  ·  barra gris = rango entre municipios  ·  Fuente: SEPE / OBECAN"
     else:
@@ -1074,15 +1200,16 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     Barras agrupadas H/M por tipo de contrato, facet por edad — Marzo 2026.
     Anotaciones reducidas: solo se etiqueta la barra más alta por panel
     (o todas si anotar_solo_mayor=false en config).
+    Soporta isla individual, provincia (SC Tenerife, Las Palmas) o Todas.
     """
     pal = get_paleta()
 
-    cfg  = get_plot_config().get("brecha_temporal_edad", {})
-    ISLA = cfg.get("isla", "Todas")
-    ANOTAR = cfg.get("anotar", True)
+    cfg        = get_plot_config().get("brecha_temporal_edad", {})
+    ISLA       = cfg.get("isla", "Todas")
+    ANOTAR     = cfg.get("anotar", True)
     SOLO_MAYOR = cfg.get("anotar_solo_mayor", True)
-    AÑO = cfg.get("ano", 2026)
-    MES = cfg.get("mes", 3)
+    AÑO        = cfg.get("ano", 2026)
+    MES        = cfg.get("mes", 3)
 
     df = _cargar_contratos(os.path.join(config.TARGET_DIR, config.DATA_P5_DIR), AÑO, MES)
     if df is None:
@@ -1095,8 +1222,28 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
         df[col] = df[col].str.strip()
     df = df[df["sexo"].isin(["Hombres", "Mujeres"])]
 
+    # Filtro geográfico: isla, provincia o Todas
     if ISLA != "Todas":
-        df = df[df["isla"].str.upper() == ISLA.upper()]
+        islas_filtro = _islas_en_ambito(ISLA)
+        if islas_filtro:
+            # Provincia o agrupación — filtrar por lista de islas
+            df = df[df["isla"].str.upper().isin(
+                [i.upper() for i in islas_filtro]
+            )]
+            context.log.info(
+                f"Ámbito '{ISLA}' → islas: {islas_filtro} "
+                f"→ {len(df)} filas"
+            )
+        else:
+            # Isla individual
+            df = df[df["isla"].str.upper() == ISLA.upper()]
+            context.log.info(
+                f"Isla '{ISLA}' → {len(df)} filas"
+            )
+
+    if df.empty:
+        context.log.warning(f"Sin datos para ámbito '{ISLA}' en {AÑO}-{MES:02d}.")
+        return
 
     TC_MAP = {
         "Indefinido":               "Indefinido",
@@ -1107,15 +1254,17 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     df["tc"] = df["Tipo Contrato"].map(TC_MAP)
     df = df.dropna(subset=["tc"])
 
-    EDAD_ORDER     = ["Menor de 25", "Entre 25 y 44", "45 o más"]
-    
-    # Ordenar tipos de contrato por volumen total (magnitud)
+    EDAD_ORDER = ["Menor de 25", "Entre 25 y 44", "45 o más"]
+
+    # Ordenar tipos de contrato por volumen total
     orden_tc = (
         df.groupby("tc")["Contratos"].sum()
         .sort_values(ascending=False).index.tolist()
     )
-    TC_LABEL_ORDER = [t for t in orden_tc if t in ["Temp. Parcial", "Temp. Completo", "Conversión", "Indefinido"]]
-    
+    TC_LABEL_ORDER = [t for t in orden_tc
+                      if t in ["Temp. Parcial", "Temp. Completo",
+                                "Conversión", "Indefinido"]]
+
     COLORS = {"Hombres": pal["H"], "Mujeres": pal["M"]}
 
     agg     = df.groupby(["edad", "tc", "sexo"])["Contratos"].sum().reset_index()
@@ -1127,7 +1276,8 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     fig, axes = plt.subplots(1, 3, figsize=(15, 6), sharey=True)
     fig.patch.set_facecolor("white")
     x = np.arange(len(TC_LABEL_ORDER))
-    w = 0.35
+    w = 0.38
+    w_bar = 0.32
 
     for ax, edad in zip(axes, EDAD_ORDER):
         ax.set_facecolor("white")
@@ -1140,10 +1290,11 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
                             (agg["tc"] == tc)]) > 0 else 0.0
                 for tc in TC_LABEL_ORDER
             ]
-            ax.bar(x + offset, vals, w, color=COLORS[sexo], alpha=0.85, zorder=3)
+            ax.bar(x + offset, vals, w_bar, color=COLORS[sexo],
+                   alpha=0.85, zorder=3)
             all_vals[sexo] = vals
 
-        # Anotaciones: solo la barra más alta por panel, o todas si SOLO_MAYOR=False
+        # Anotaciones
         if ANOTAR:
             for sexo, offset in [("Hombres", -w/2), ("Mujeres", w/2)]:
                 vals = all_vals[sexo]
@@ -1158,21 +1309,24 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
                             color=COLORS[sexo], fontweight="bold")
 
         ax.set_xticks(x)
-        ax.set_xticklabels(TC_LABEL_ORDER, fontsize=9, rotation=20, ha="right")
+        ax.set_xticklabels(TC_LABEL_ORDER, fontsize=9,
+                           rotation=20, ha="right")
         ax.set_title(edad, fontsize=11, fontweight="bold", pad=8)
         ax.yaxis.grid(True, color="#eeeeee", zorder=0)
         ax.spines[["top", "right", "left"]].set_visible(False)
         ax.set_ylim(0, 62)
         if ax == axes[0]:
-            ax.set_ylabel("% sobre contratos del grupo edad-sexo", fontsize=10)
+            ax.set_ylabel("% sobre contratos del grupo edad-sexo",
+                          fontsize=10)
 
     mes_names = {
-        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
-        7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+        1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+        5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+        9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre",
     }
-    title_date = f"{mes_names.get(MES, f'{MES:02d}')} {AÑO}"
+    title_date  = f"{mes_names.get(MES, f'{MES:02d}')} {AÑO}"
+    titulo_loc  = "Canarias" if ISLA == "Todas" else ISLA
 
-    titulo_loc = "Canarias" if ISLA == "Todas" else ISLA
     fig.suptitle(
         f"Distribución del tipo de contrato por edad y género — "
         f"{titulo_loc}, {title_date}",
@@ -1192,7 +1346,6 @@ def plot_brecha_temporal_edad(context: AssetExecutionContext) -> None:
     plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Brecha Edad]({out})")})
-
 
 @asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
 def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> None:
@@ -1218,6 +1371,7 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
     cfg = get_plot_config().get("historico_tipos_contrato", {})
     AÑO_FIN = cfg.get("ano_fin", 2026)
     MES_FIN = cfg.get("mes_fin", 3)
+    AMBITO = cfg.get("ambito", "Canarias")
 
     FUENTES = []
     for año in range(2019, AÑO_FIN):
@@ -1264,6 +1418,23 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
 
     all_dfs.append(df_latest)
     df_hist = pd.concat(all_dfs, ignore_index=True)
+
+    from checks_p5 import inferir_isla
+    if "isla" not in df_hist.columns:
+        df_hist["isla"] = np.nan
+    df_hist["isla"] = df_hist["isla"].fillna("")
+
+    if "Municipio" in df_hist.columns:
+        df_hist["Municipio"] = df_hist["Municipio"].astype(str).apply(_fix_articulo)
+        mask = (df_hist["isla"] == "") | df_hist["isla"].isna()
+        df_hist.loc[mask, "isla"] = df_hist.loc[mask, "Municipio"].apply(inferir_isla)
+
+    df_hist["isla"] = df_hist["isla"].astype(str).str.strip().str.title()
+    df_hist = _filtrar_ambito(df_hist, AMBITO)
+
+    if df_hist.empty:
+        context.log.warning(f"Sin datos de contratos para el ámbito {AMBITO}")
+        return
 
     TC_MAP = {
         "Indefinido":               "Indefinido",
@@ -1367,7 +1538,7 @@ def plot_historico_tipos_contrato_por_edad(context: AssetExecutionContext) -> No
         fig.legend(handles=handles, loc="lower center", ncol=3,
                    fontsize=10, frameon=False, bbox_to_anchor=(0.5, 0.02))
 
-        fig.suptitle(f"{TC_TITLE[tc_name]} — Canarias 2019-{AÑO_FIN}",
+        fig.suptitle(f"{TC_TITLE[tc_name]} — {_titulo_ambito(AMBITO)} 2019-{AÑO_FIN}",
                      fontsize=13, fontweight="bold", y=0.965)
         fig.text(0.99, 0.015, "Fuente: OBECAN / SEPE",
                  ha="right", fontsize=8, color="#888888")
@@ -1607,7 +1778,7 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + scale_fill_manual(
                 values={"Mayoría Hombres":"#4A90D9",
                         "Mayoría Mujeres":"#D94A8C"}, name=None)
-            + scale_y_continuous(labels=lambda l: [f"{v:+.1f}%" for v in l])
+            + scale_y_continuous(labels=lambda l: [f"+{abs(v):.1f}%" if v != 0 else "0%" for v in l])
             + coord_flip()
             + labs(title=titulo,
                    subtitle=subtitulo,
@@ -1657,7 +1828,7 @@ def plot_ocupacion_divergente_canarias(context: AssetExecutionContext) -> None:
             + scale_fill_manual(
                 values={"Mayoría Hombres":"#4A90D9",
                         "Mayoría Mujeres":"#D94A8C"}, name=None)
-            + scale_y_continuous(labels=lambda l: [f"{v:+.1f}%" for v in l])
+            + scale_y_continuous(labels=lambda l: [f"+{abs(v):.1f}%" if v != 0 else "0%" for v in l])
             + coord_flip()
             + labs(title=titulo,
                    subtitle="Diferencia (H − M) como % del total de contratos de cada isla · grupos CNO-1 · escala compartida",
@@ -1705,26 +1876,7 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
     MES_FIN = cfg.get("mes_fin", 3)
     fig_h_per_row = cfg.get("fig_height_per_row", 2.8)
 
-    ABREV = {
-        "Producción cinematográfica, de vídeo y de programas de televisión, "
-        "grabación de sonido y edición musical":                 "Prod. audiovisual",
-        "Servicios a edificios y actividades de jardinería":     "Servicios a edificios",
-        "Actividades de construcción especializada":             "Construcción esp.",
-        "Administración pública y defensa; seguridad social obligatoria": "Adm. pública",
-        "Actividades de creación artística y artes escénicas":   "Artes escénicas",
-        "Actividades sanitarias":                                "Sanidad",
-        "Servicios de alojamiento":                              "Alojamiento",
-        "Servicios de comidas y bebidas":                        "Hostelería",
-        "Comercio al por menor":                                 "Comercio minorista",
-        "Comercio al por mayor":                                 "Comercio mayorista",
-        "Educación":                                             "Educación",
-        "Construcción de edificios":                             "Construcción",
-        "Agricultura, ganadería, caza y servicios relacionados": "Agricultura",
-        "Transporte terrestre y por tubería":                    "Transporte",
-        "Actividades deportivas, recreativas y de entretenimiento": "Deporte/recreación",
-        "Asistencia en establecimientos residenciales":          "Asist. residencial",
-        "Actividades de servicios sociales sin alojamiento":     "Servicios sociales",
-    }
+    ABREV = ABREV_ACTIVIDADES
 
     data_dir = os.path.join(config.TARGET_DIR, config.DATA_P5_DIR)
 
@@ -1807,8 +1959,19 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
 
     df_all = pd.concat(dfs, ignore_index=True)
 
-    if AMBITO != "Canarias" and "isla" in df_all.columns:
-        df_all = df_all[df_all["isla"].str.upper() == AMBITO.upper()]
+    from checks_p5 import inferir_isla
+    if "isla" not in df_all.columns:
+        df_all["isla"] = np.nan
+    df_all["isla"] = df_all["isla"].fillna("")
+
+    if "Municipio" in df_all.columns:
+        df_all["Municipio"] = df_all["Municipio"].astype(str).apply(_fix_articulo)
+        mask = (df_all["isla"] == "") | df_all["isla"].isna()
+        df_all.loc[mask, "isla"] = df_all.loc[mask, "Municipio"].apply(inferir_isla)
+
+    df_all["isla"] = df_all["isla"].astype(str).str.strip().str.title()
+
+    df_all = _filtrar_ambito(df_all, AMBITO)
 
     df_all = df_all[df_all["sexo"].isin(["Hombres", "Mujeres"])]
     df_all["fecha"] = pd.to_datetime(
@@ -1827,13 +1990,38 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
         context.log.warning("Sin datos tras aplicar el filtro temporal.")
         return
 
-    # ── Top N sectores por volumen total ─────────────────────────────────────
-    top_act = (df_all.groupby("Actividad económica")["Contratos"]
-               .sum().nlargest(TOP_N).index.tolist())
+    # Consolidar sectores de construcción agregando sus datos
+    mask_const = df_all["Actividad económica"].isin(["Construcción de edificios", "Actividades de construcción especializada"])
+    df_all.loc[mask_const, "Actividad económica"] = "Construcción"
+
+    # Generar abreviatura temporal para comparar con sectores configurados
+    df_all["actividad_short_temp"] = df_all["Actividad económica"].apply(_abreviar_actividad)
+
+    SECTORES = cfg.get("sectores", None)
+    if SECTORES is not None and isinstance(SECTORES, list) and len(SECTORES) > 0:
+        # Filtrar solo los sectores configurados (por nombre real o abreviado, insensible a mayúsculas)
+        sectores_clean = {s.lower().strip() for s in SECTORES}
+        df_all = df_all[
+            df_all["Actividad económica"].str.lower().str.strip().isin(sectores_clean) |
+            df_all["actividad_short_temp"].str.lower().str.strip().isin(sectores_clean)
+        ].copy()
+
+        if df_all.empty:
+            context.log.warning("Sin datos tras aplicar el filtro de sectores configurados.")
+            return
+
+        # Ordenar los sectores elegidos por su volumen de contratos descendente
+        top_act = (df_all.groupby("Actividad económica")["Contratos"]
+                   .sum().sort_values(ascending=False).index.tolist())
+    else:
+        # Comportamiento por defecto (Top N general)
+        top_act = (df_all.groupby("Actividad económica")["Contratos"]
+                   .sum().nlargest(TOP_N).index.tolist())
+        if "Construcción" in df_all["Actividad económica"].values and "Construcción" not in top_act:
+            top_act.append("Construcción")
 
     df_top = df_all[df_all["Actividad económica"].isin(top_act)].copy()
-    df_top["actividad_short"] = df_top["Actividad económica"].map(ABREV).fillna(
-        df_top["Actividad económica"].str[:25])
+    df_top["actividad_short"] = df_top["Actividad económica"].apply(_abreviar_actividad)
 
     # ── Ratio H/(H+M) por sector y mes ───────────────────────────────────────
     pivot = (
@@ -1857,8 +2045,9 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
 
     pivot["ratio_hm"] = pivot["Hombres"] / pivot["total"]
 
+    # Ordenar las facetas de más feminizadas (ratio_hm bajo) a más masculinizadas (ratio_hm alto)
     orden_act = (pivot.groupby("actividad_short")["ratio_hm"]
-                 .mean().sort_values(ascending=False).index.tolist())
+                 .mean().sort_values(ascending=True).index.tolist())
 
     # ── Paleta Dark2 ──────────────────────────────────────────────────────────
     cmap_dark2 = plt.get_cmap("Dark2")
@@ -1919,7 +2108,7 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
     fig.supylabel("% hombres contratados", fontsize=10, x=0.02)
     fig.suptitle(
         f"Evolución de la segregación de género por sector — "
-        f"{AMBITO} {ANO_INI}\u2013{ANO_FIN}",
+        f"{_titulo_ambito(AMBITO)} {ANO_INI}\u2013{ANO_FIN}",
         fontsize=13, fontweight="bold", y=0.99)
 
     plt.tight_layout(rect=[0.03, 0.02, 1, 0.97])
@@ -1928,3 +2117,144 @@ def plot_segregacion_sectorial_temporal(context: AssetExecutionContext) -> None:
     plt.close(fig)
     context.add_output_metadata(
         {"plot": MetadataValue.md(f"![Segregación temporal]({out})")})
+
+@asset(deps=[preprocesar_datos_p5], group_name="viz_estructura_laboral")
+def plot_brecha_genero(context: AssetExecutionContext) -> None:
+    """
+    Arrow plot: top N municipios con mayor variación absoluta del índice
+    de segregación de género entre ano_ini y ano_fin.
+
+    Flecha desde valor ano_ini (punto gris) hasta valor ano_fin (punta).
+      · Verde = flecha apunta hacia 0 (mejora hacia paridad)
+      · Rojo  = flecha apunta alejándose de 0 (empeora)
+
+    Índice = 2*H/(H+M) - 1, en % (×100).
+    """
+    import math
+
+    cfg     = get_plot_config()["brecha_genero"]
+    TOP_N   = cfg.get("top_n", 5)
+    AÑO_INI = cfg.get("ano_ini", 2021)
+    AÑO_FIN = cfg.get("ano_fin", 2023)
+    UMBRAL  = cfg.get("umbral", 0.01)
+
+    ocu    = pd.read_csv(get_processed_path(cfg["dataset_ocu"])).dropna(subset=["num_casos"])
+    merged = _calcular_indice_brecha(ocu)
+
+    ini = merged[merged["año"] == AÑO_INI][["municipio", "indice_brecha"]].rename(
+        columns={"indice_brecha": "val_ini"})
+    fin = merged[merged["año"] == AÑO_FIN][["municipio", "indice_brecha"]].rename(
+        columns={"indice_brecha": "val_fin"})
+
+    slope = ini.merge(fin, on="municipio")
+    slope["delta"]     = slope["val_fin"] - slope["val_ini"]
+    slope["delta_abs"] = slope["delta"].abs()
+
+    slope["direccion"] = slope.apply(
+        lambda r: "Mejora"   if abs(r["val_fin"]) < abs(r["val_ini"]) - UMBRAL
+        else ("Empeora"      if abs(r["val_fin"]) > abs(r["val_ini"]) + UMBRAL
+        else  "Sin cambio"),
+        axis=1
+    )
+
+    top_idx = slope["delta_abs"].nlargest(TOP_N).index
+    top     = slope.loc[top_idx].copy()
+
+    top["val_ini_pct"] = top["val_ini"] * 100
+    top["val_fin_pct"] = top["val_fin"] * 100
+    top["delta_pct"]   = top["delta"]   * 100
+
+    top = top.sort_values("delta_pct", ascending=True)
+    top["municipio"] = top["municipio"].str.title()
+    top["municipio"] = pd.Categorical(
+        top["municipio"], categories=top["municipio"].tolist(), ordered=True
+    )
+
+    COLORES = {
+        "Empeora":    "#D13111",
+        "Mejora":     "#10C710",
+        "Sin cambio": "#AAAAAA",
+    }
+
+    lim = max(top["val_ini_pct"].abs().max(),
+              top["val_fin_pct"].abs().max()) * 1.45
+
+    municipios = top["municipio"].cat.categories.tolist()
+    n          = len(municipios)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.patch.set_facecolor("white")
+    ax.set_facecolor("white")
+
+    # Grid vertical suave
+    ax.xaxis.grid(True, color="#eeeeee", lw=0.8, zorder=0)
+    ax.set_axisbelow(True)
+
+    # Línea de paridad
+    ax.axvline(0, color="#cccccc", lw=1.2, ls="--", zorder=1)
+
+    for i, mun in enumerate(municipios):
+        row   = top[top["municipio"] == mun].iloc[0]
+        color = COLORES[row["direccion"]]
+        ini_v = row["val_ini_pct"]
+        fin_v = row["val_fin_pct"]
+
+        # Flecha primero
+        ax.annotate(
+            "", xy=(fin_v, i), xytext=(ini_v, i),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=color,
+                lw=2.2,
+                mutation_scale=16,
+            ),
+            zorder=3,
+        )
+
+        # Punto origen encima
+        ax.scatter(ini_v, i, s=70, facecolors="white",
+                   edgecolors="#888888", linewidths=1.8,
+                   zorder=5)
+
+    # ── Ejes ─────────────────────────────────────────────────────────────────
+    ax.set_yticks(range(n))
+    ax.set_yticklabels(municipios, fontsize=10, fontweight="bold")
+    ax.set_xlim(-lim, lim)
+    ax.set_ylim(-0.9, n - 0.5)
+
+    tick_step = cfg.get("tick_step", 5)
+    max_tick  = math.ceil(lim / tick_step) * tick_step
+    ticks     = [t for t in range(-max_tick, max_tick + 1, tick_step)
+                 if abs(t) <= lim]
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(
+        [f"{abs(t)}%" if t != 0 else "0%" for t in ticks],
+        fontsize=7.5, color="#aaaaaa"
+    )
+    ax.tick_params(axis="x", length=0)
+    ax.tick_params(axis="y", length=0)
+    ax.spines[["top", "right", "left", "bottom"]].set_visible(False)
+
+    # Anotaciones de dirección debajo de los ticks
+    ax.text(-lim * 0.98, -0.75, "← mayoría mujeres",
+            ha="left", va="center", fontsize=9,
+            color="#333333", style="italic")
+    ax.text(lim * 0.98, -0.75, "mayoría hombres →",
+            ha="right", va="center", fontsize=9,
+            color="#333333", style="italic")
+
+    # ── Títulos ───────────────────────────────────────────────────────────────
+    fig.suptitle("Municipios con mayor cambio en la brecha de género en SC de Tenerife",
+                 fontsize=14, fontweight="bold", y=1.02)
+    ax.set_title(
+        f"○ = {AÑO_INI}  ·  punta = {AÑO_FIN}",
+        fontsize=9, color="#666666", pad=10)
+    fig.text(0.99, -0.04, "Fuente: ISTAC · ocupacion-sc-3",
+             ha="right", fontsize=8, color="#888888")
+
+    plt.tight_layout()
+    out = os.path.join(get_plot_dir(), "brecha_genero_divergente.png")
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    context.add_output_metadata(
+        {"plot": MetadataValue.md(f"![Brecha de Género Divergente]({out})")})

@@ -105,10 +105,6 @@ Este documento describe detalladamente la base teórica y técnica de cada una d
 *   **Gestalt**: *Proporcionalidad*. Valida que las diferencias de ingresos o rentas extremas no colapsen la escala visual, recurriendo de ser necesario a transformaciones (e.g. logarítmicas) o acotamientos.
 *   **Gramática de Gráficos**: *Límites y Transformaciones de Escala*. Ajuste dinámico de los límites (`xlim`/`ylim`) y ticks.
 
-#### `check_ratio_hm_estabilidad` & `check_balance_sexos_por_municipio`
-*   **Gestalt**: *Similitud / Veracidad*. Previene anomalías visuales en municipios con datos sesgados o de un solo sexo que distorsionen los ratios de brecha y rompan la paleta manual simétrica.
-*   **Gramática de Gráficos**: *Escalas / Mapeo*. Protege la coherencia del canal de color y relleno mapeado al sexo.
-
 ---
 
 ### 4. Calidad del Gráfico Físico y Layout
@@ -137,9 +133,15 @@ Este documento describe detalladamente la base teórica y técnica de cada una d
 *   **Gestalt**: *Similitud*. Valida la existencia estricta de "Hombres" y "Mujeres" en los datos para evitar que la escala de color manual binaria falle y asigne colores aleatorios rotos.
 *   **Gramática de Gráficos**: *Escala de Color / Relleno*. Consistencia en el canal estético de `fill`.
 
-#### `check_datos_brecha_salarial` & `check_datos_mapa_brecha`
-*   **Gestalt**: *Cierre y Figura/Fondo*. Exigen que existan valores tanto positivos como negativos en las brechas para garantizar que las geometrías de desviación y las escalas divergentes de dos tonos tengan sentido narrativo (rango completo visible).
-*   **Gramática de Gráficos**: *Escalas / Geometrías*. Mapeo a escalas divergentes y geometrías de lollipop/mapa.
+#### `check_datos_mapa_brecha_genero`
+*   **Gestalt**: *Cierre y Figura/Fondo*. Exige que existan valores en las brechas para garantizar que las escalas y rangos de normalización tengan sentido narrativo (rango completo visible).
+*   **Gramática de Gráficos**: *Escalas / Geometrías*. Mapeo a escalas y normalizaciones personalizadas en la capa coroplética (`geom_sf`).
+
+#### `check_datos_brecha_genero` (Arrow Plot)
+*   **Gestalt**:
+    *   *Proporcionalidad*: La longitud y dirección de cada flecha debe representar fielmente la magnitud matemática y la dirección del cambio. Un municipio que aumenta su segregación tiene una flecha roja apuntando lejos del 0, mientras que uno que reduce su segregación y se acerca a la paridad tiene una flecha verde apuntando hacia el 0.
+    *   *Figura/Fondo*: Los puntos de origen vacíos (círculos grises) actúan como fondo estructurado del cual emergen las flechas coloreadas (verde/rojo) que guían la mirada del lector hacia el estado final.
+*   **Gramática de Gráficos**: *Mapeo Estético (aes)*. Valida que los datos de inicio (`val_ini`) y fin (`val_fin`) estén completos para cada municipio a comparar, permitiendo mapear la posición X del origen y destino de cada flecha y asignar el color discreto según la dirección del cambio (`Mejora` o `Empeora`).
 
 #### `check_datos_gini_evolucion`
 *   **Gestalt**: *Continuidad*. Impide la generación de líneas de tendencia quebradas o discontinuas en la evolución temporal de desigualdad.
@@ -161,8 +163,8 @@ Este documento describe detalladamente la base teórica y técnica de cada una d
 *   **Gramática de Gráficos**: *Tema / Capas Anotadas*. Validación de rectángulos de fondo (`geom_rect` o similar) y anotaciones de texto.
 
 #### `check_datos_brecha_temporal_edad`
-*   **Gestalt**: *Proximidad*. Valida que las variables de sexo y grupo de edad estén completas para que la agrupación de barras H/M una al lado de la otra sea regular y coherente espacialmente.
-*   **Gramática de Gráficos**: *Geometría (Geom)*. Asegura un `geom_col(position="dodge")` simétrico y uniforme.
+*   **Gestalt**: *Proximidad / Cierre*. Valida que las variables de sexo, grupo de edad y ámbito geográfico (soportando tanto islas individuales como agrupaciones provinciales como "SC Tenerife" mediante la resolución de `_islas_en_ambito`) estén completas para que la agrupación de barras H/M una al lado de la otra sea regular, coherente espacialmente y represente el todo territorial.
+*   **Gramática de Gráficos**: *Geometría (Geom) / Datos (Data)*. Asegura un `geom_col(position="dodge")` simétrico y uniforme para el ámbito territorial configurado.
 
 #### `check_ocupacion_divergente_canarias`
 *   **Gestalt**: *Figura/Fondo*. Garantiza que el gráfico divergente del CNO-1 canario cuente con el ámbito geográfico y las variables necesarias para que el eje central de paridad de género actúe como ancla de fondo equilibrada.

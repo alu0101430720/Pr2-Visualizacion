@@ -62,8 +62,8 @@ El pipeline genera automáticamente las visualizaciones en formato de alta resol
 *   **`covid_prestaciones_islas.png`**: Incremento masivo de prestaciones por desempleo durante la pandemia en el sector turístico.
 
 ### 5. Análisis Espacial e Índices Ponderados
-*   **`mapa_brecha_salarial.png`**: Mapa coroplético interactivo de la provincia con escala divergente ponderada por volumen de sueldos e indexada con nombres de municipios canónicos.
-*   **`brecha_salarial_lollipop.png`**: Lollipop de deltas en la brecha salarial municipal para el periodo seleccionado.
+*   **`mapa_brecha_genero.png`**: Mapa coroplético interactivo de la provincia con escala divergente/secuencial del índice de brecha de género por municipios o secciones censales.
+*   **`brecha_genero_divergente.png`**: Gráfico de flechas (arrow plot) de deltas en la brecha de género municipal para el periodo seleccionado.
 
 ---
 
