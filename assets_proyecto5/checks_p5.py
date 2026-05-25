@@ -315,14 +315,24 @@ def check_conteo_municipios(context, preprocesar_datos_p5: str):
         
         # Búsqueda de columna en minúscula (case-insensitive)
         col_muni = next((c for c in df.columns if c.lower() == "municipio"), None)
-        if not col_muni:
+        col_terr = next((c for c in df.columns if c.lower() == "territorio"), None)
+        col_tipo = next((c for c in df.columns if c.lower() == "tipo_territorio"), None)
+
+        if col_muni:
+            mun_series = df[col_muni].dropna().unique()
+        elif col_terr and col_tipo:
+            # En gini/rentas la columna se llama TERRITORIO e incluye canarias, provincias, islas y municipios.
+            # Filtramos solo las filas de tipo_territorio == "municipio"
+            df_muni = df[df[col_tipo].astype(str).str.lower() == "municipio"]
+            mun_series = df_muni[col_terr].dropna().unique()
+        else:
             passed = False
-            report_md += "🔴 Columna `municipio` faltante.\n"
+            report_md += "🔴 Columna `municipio` (o combinación `TERRITORIO` y `tipo_territorio`) faltante.\n"
             continue
 
         conteo      = {isla: set() for isla in ESPERADOS_ISLAS}
         desconocidos = set()
-        for muni in df[col_muni].dropna().unique():
+        for muni in mun_series:
             muni_str = str(muni).strip()
             muni_low = muni_str.lower()
             isla = inferir_isla(muni_str)
