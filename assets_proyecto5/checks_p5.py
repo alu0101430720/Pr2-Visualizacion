@@ -161,11 +161,16 @@ def _png_esperados_dinamicos() -> list[str]:
     return PNG_ESPERADOS
 
 
+# Crear un mapeo normalizado a minúsculas y sin espacios de todos los municipios a su isla
+_MUNICIPIO_TO_ISLA_LOWER = {}
+for _isla, _munis in MUNICIPIOS_POR_ISLA.items():
+    for _m in _munis:
+        _MUNICIPIO_TO_ISLA_LOWER[_m.strip().lower()] = _isla
+
 def inferir_isla(municipio: str) -> str:
-    for isla, munis in MUNICIPIOS_POR_ISLA.items():
-        if municipio in munis:
-            return isla
-    return "Desconocida"
+    if not isinstance(municipio, str):
+        return "Desconocida"
+    return _MUNICIPIO_TO_ISLA_LOWER.get(municipio.strip().lower(), "Desconocida")
 
 
 
@@ -307,16 +312,24 @@ def check_conteo_municipios(context, preprocesar_datos_p5: str):
         fname = os.path.basename(file)
         report_md += f"\n#### `{fname}`\n"
         df = pd.read_csv(file)
-        if "municipio" not in df.columns:
+        
+        # Búsqueda de columna en minúscula (case-insensitive)
+        col_muni = next((c for c in df.columns if c.lower() == "municipio"), None)
+        if not col_muni:
             passed = False
             report_md += "🔴 Columna `municipio` faltante.\n"
             continue
 
         conteo      = {isla: set() for isla in ESPERADOS_ISLAS}
         desconocidos = set()
-        for muni in df["municipio"].dropna().unique():
-            isla = inferir_isla(muni)
-            conteo[isla].add(muni) if isla != "Desconocida" else desconocidos.add(muni)
+        for muni in df[col_muni].dropna().unique():
+            muni_str = str(muni).strip()
+            muni_low = muni_str.lower()
+            isla = inferir_isla(muni_str)
+            if isla != "Desconocida":
+                conteo[isla].add(muni_low)
+            else:
+                desconocidos.add(muni_str)
 
         is_sc_only = "-sc-" in fname.lower()
         report_md += "| Isla | Encontrados | Esperados | Estado | Observaciones |\n|---|---|---|---|---|\n"
@@ -327,10 +340,10 @@ def check_conteo_municipios(context, preprocesar_datos_p5: str):
             found = len(conteo[isla])
             if found != expected:
                 passed = False
-                enc_low = {m.lower() for m in conteo[isla]}
+                enc_low = conteo[isla]
                 ofi_low = {m.lower() for m in CANONICOS_ISLA[isla]}
                 faltantes = [m for m in CANONICOS_ISLA[isla] if m.lower() not in enc_low]
-                sobrantes = [m for m in conteo[isla]          if m.lower() not in ofi_low]
+                sobrantes = [m for m in conteo[isla]          if m not in ofi_low]
                 detalle   = ""
                 if faltantes:
                     detalle += f"**Faltan:** {', '.join(faltantes)}. "
@@ -506,9 +519,11 @@ def check_formato_nombres_municipio(context, preprocesar_datos_p5: str):
 
     for file in csv_files:
         df = pd.read_csv(file)
-        if "municipio" not in df.columns:
+        # Búsqueda de columna en minúscula (case-insensitive)
+        col_muni = next((c for c in df.columns if c.lower() == "municipio"), None)
+        if not col_muni:
             continue
-        serie      = df["municipio"].dropna().astype(str).unique()
+        serie      = df[col_muni].dropna().astype(str).unique()
         espacios   = [m for m in serie if m != m.strip()]
         invertidos = [m for m in serie if "," in m]
         n_e, n_i   = len(espacios), len(invertidos)
@@ -578,8 +593,10 @@ def check_longitud_etiquetas(context, preprocesar_datos_p5: str):
 
     for file in csv_files:
         df = pd.read_csv(file)
-        for col in ("municipio", "Actividad económica"):
-            if col not in df.columns:
+        for col_name in ("municipio", "Actividad económica"):
+            # Búsqueda de columna en minúscula (case-insensitive)
+            col = next((c for c in df.columns if c.lower() == col_name.lower()), None)
+            if not col:
                 continue
             serie   = df[col].dropna().astype(str)
             max_len = int(serie.str.len().max())
@@ -734,7 +751,8 @@ def check_datos_actividad_barras(context):
     passed = passed and ok
     report_md += f"- Columnas requeridas: {'🟢' if ok else '🔴'} (faltan: {falta or '–'})\n"
 
-    mun = set(df["municipio"].dropna().unique()) if "municipio" in df.columns else set()
+    col_muni = next((c for c in df.columns if c.lower() == "municipio"), None)
+    mun = set(df[col_muni].dropna().unique()) if col_muni else set()
     ajenas = {inferir_isla(m) for m in mun} - ISLAS_SC - {"Desconocida"}
     ok = len(ajenas) == 0
     passed = passed and ok
